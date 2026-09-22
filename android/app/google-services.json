@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "1089255039640",
+    "project_id": "dtp-app-3c841",
+    "storage_bucket": "dtp-app-3c841.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1089255039640:android:72c9f5123d00ca376466ed",
+        "android_client_info": {
+          "package_name": "com.dtp.driver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDk057ymKv4w_wqJGD6nq1sIgF4SuIvxJY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1089255039640:android:3664d84f3d11ed566466ed",
+        "android_client_info": {
+          "package_name": "com.dtp.sa"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDk057ymKv4w_wqJGD6nq1sIgF4SuIvxJY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

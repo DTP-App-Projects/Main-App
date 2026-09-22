@@ -1,22 +1,30 @@
 import 'package:flutter/material.dart';
 
 class AppColors {
-  static const Color primarySwatchColor = Color(0xff4E028B);
+  static const Color primarySwatchColor = Color(0xff03745f);
+  static const Color secondaryColor = Color(0xff014eaf);
   static const Color greyFont = Color(0xff76757A);
   static const Color grey46 = Color(0xff464646);
   static const Color red = Color(0xffE84442);
 
-  static MaterialColor primaryColor = const MaterialColor(0xFF4E028B, <int, Color>{
-    50: Color(0x1A4E028B),
-    100: Color(0x334E028B),
-    200: Color(0x4D4E028B),
-    300: Color(0x664E028B),
-    400: Color(0x804E028B),
-    500: Color(0x994E028B),
-    600: Color(0xB34E028B),
-    700: Color(0xCC4E028B),
-    800: Color(0xE64E028B),
-    900: Color(0xFF4E028B),
+  /// Green -> blue gradient taken from the app logo.
+  static const LinearGradient brandGradient = LinearGradient(
+    colors: [secondaryColor, primarySwatchColor],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  static MaterialColor primaryColor = const MaterialColor(0xFF03745f, <int, Color>{
+    50: Color(0x1A03745f),
+    100: Color(0x3303745f),
+    200: Color(0x4D03745f),
+    300: Color(0x6603745f),
+    400: Color(0x8003745f),
+    500: Color(0x9903745f),
+    600: Color(0xB303745f),
+    700: Color(0xCC03745f),
+    800: Color(0xE603745f),
+    900: Color(0xFF03745f),
   });
 
   static MaterialColor neutralColor = const MaterialColor(0xff101828, <int, Color>{

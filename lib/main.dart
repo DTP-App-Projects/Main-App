@@ -45,7 +45,7 @@ Future _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
             priority: Priority.high,
             icon: 'notification_icon',
             colorized: true,
-            color: Color(0xff0090c2),
+            color: Color(0xff03745f),
           ),
           // ✅ إضافة إعدادات iOS للإشعارات المحلية
           iOS: DarwinNotificationDetails(presentAlert: true, presentBadge: true, presentSound: true),
@@ -65,7 +65,7 @@ void _showLocalNotification(RemoteMessage message) {
     priority: Priority.high,
     icon: 'notification_icon',
     colorized: true,
-    color: Color(0xff0090c2),
+    color: Color(0xff03745f),
   );
 
   // ✅ إضافة إعدادات iOS للإشعارات المحلية
@@ -206,7 +206,7 @@ Future main() async {
               priority: Priority.high,
               icon: 'notification_icon',
               colorized: true,
-              color: Color(0xff0090c2),
+              color: Color(0xff03745f),
             ),
             iOS: DarwinNotificationDetails(presentAlert: true, presentBadge: true, presentSound: true),
           ),

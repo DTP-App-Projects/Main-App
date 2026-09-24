@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Golden renders are a design-review artefact, regenerated on demand with
+#   flutter test test/ui --dart-define=GOLDENS=true --update-goldens
+test/ui/goldens/

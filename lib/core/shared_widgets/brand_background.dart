@@ -1,32 +1,38 @@
 import 'package:flutter/material.dart';
-import 'package:digital_trade_portal/core/utils/colors/colors.dart';
 
-/// Plain white canvas with two soft brand coloured glows in the opposite
-/// corners, so the middle of the screen stays white and any content placed
-/// on top of it keeps a clean, edge free background.
+import '../utils/colors/colors.dart';
+import '../utils/theme/tokens.dart';
+
+/// The Driver login canvas (S1): the page colour with two soft brand glows —
+/// bluish top-right, greenish bottom-left — so the middle stays clean for
+/// content. Physical corners, like the gradient: a brand mark, not a
+/// reading direction.
 class BrandBackground extends StatelessWidget {
-  const BrandBackground({super.key, this.opacity = .14});
+  const BrandBackground({super.key, this.opacity});
 
-  final double opacity;
+  /// Glow strength; defaults to a quieter value in dark mode.
+  final double? opacity;
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
+    final t = context.tokens;
+    final width = MediaQuery.sizeOf(context).width;
     final blobSize = width * 1.1;
+    final strength = opacity ?? (t.isDark ? .10 : .14);
 
     return DecoratedBox(
-      decoration: const BoxDecoration(color: Colors.white),
+      decoration: BoxDecoration(color: t.isDark ? t.background : Colors.white),
       child: Stack(
         children: [
-          PositionedDirectional(
+          Positioned(
             top: -blobSize * .45,
-            start: -blobSize * .30,
-            child: _Blob(size: blobSize, color: AppColors.secondaryColor, opacity: opacity),
+            right: -blobSize * .30,
+            child: _Blob(size: blobSize, color: AppColors.brandBlue, opacity: strength),
           ),
-          PositionedDirectional(
+          Positioned(
             bottom: -blobSize * .45,
-            end: -blobSize * .30,
-            child: _Blob(size: blobSize, color: AppColors.primarySwatchColor, opacity: opacity),
+            left: -blobSize * .30,
+            child: _Blob(size: blobSize, color: AppColors.brandTeal, opacity: strength),
           ),
         ],
       ),

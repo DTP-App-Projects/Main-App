@@ -44,6 +44,10 @@ dependencies:
   flutter_html: ^3.0.0
   flutter_spinkit: ^5.2.1
   package_info_plus: ^8.3.1
+  intl: any
+  # Onboarding documents are commercial registrations and VAT certificates,
+  # which are usually PDFs -- image_picker alone cannot reach them.
+  file_picker: ^10.3.3
 
 
 dev_dependencies:
@@ -57,27 +61,24 @@ flutter:
 
   assets:
     - assets/images/auth/
+    - assets/images/general/
     - lib/core/language/
 
 
   fonts:
-    - family: DMSans
-      fonts:
-        - asset: assets/fonts/DMSans-Black.ttf
-        - asset: assets/fonts/DMSans-Bold.ttf
-        - asset: assets/fonts/DMSans-ExtraBold.ttf
-        - asset: assets/fonts/DMSans-Light.ttf
-        - asset: assets/fonts/DMSans-Medium.ttf
-        - asset: assets/fonts/DMSans-Regular.ttf
-        - asset: assets/fonts/DMSans-SemiBold.ttf
-        - asset: assets/fonts/DMSans-Thin.ttf
-        - asset: assets/fonts/DMSans-ThinItalic.ttf
     - family: IBMPlex
       fonts:
-        - asset: assets/fonts/IBMPlexSansArabic-Bold.ttf
-        - asset: assets/fonts/IBMPlexSansArabic-ExtraLight.ttf
-        - asset: assets/fonts/IBMPlexSansArabic-Light.ttf
-        - asset: assets/fonts/IBMPlexSansArabic-Medium.ttf
-        - asset: assets/fonts/IBMPlexSansArabic-Regular.ttf
-        - asset: assets/fonts/IBMPlexSansArabic-SemiBold.ttf
         - asset: assets/fonts/IBMPlexSansArabic-Thin.ttf
+          weight: 100
+        - asset: assets/fonts/IBMPlexSansArabic-ExtraLight.ttf
+          weight: 200
+        - asset: assets/fonts/IBMPlexSansArabic-Light.ttf
+          weight: 300
+        - asset: assets/fonts/IBMPlexSansArabic-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/IBMPlexSansArabic-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/IBMPlexSansArabic-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/IBMPlexSansArabic-Bold.ttf
+          weight: 700

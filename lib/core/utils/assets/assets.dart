@@ -1,6 +1,6 @@
 class AssetData {
   ////////////////// splash & onboarding icons ////////////////////////////
-  static const logo = "assets/images/onboarding/logo.png";
+  static const logo = "assets/images/general/logo.png";
   static const logo2 = "assets/images/onboarding/logo2.png";
   static const splash = "assets/images/onboarding/splash.json";
   static const onboarding1 = "assets/images/onboarding/onboarding1.png";

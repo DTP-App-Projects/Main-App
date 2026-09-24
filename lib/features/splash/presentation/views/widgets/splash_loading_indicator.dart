@@ -27,7 +27,8 @@ class _SplashLoadingIndicatorState extends State<SplashLoadingIndicator> with Si
 
   @override
   Widget build(BuildContext context) {
-    final dotSize = MediaQuery.of(context).size.height * .009;
+    // Fixed dp: a height-relative dot vanished on short or landscape screens.
+    const dotSize = 5.0;
 
     return AnimatedBuilder(
       animation: _controller,
@@ -48,7 +49,9 @@ class _SplashLoadingIndicatorState extends State<SplashLoadingIndicator> with Si
                   decoration: BoxDecoration(shape: BoxShape.circle, gradient: AppColors.brandGradient),
                   foregroundDecoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: .65 - .65 * pulse),
+                    color: Theme.of(context)
+                        .scaffoldBackgroundColor
+                        .withValues(alpha: .65 - .65 * pulse),
                   ),
                 ),
               ),

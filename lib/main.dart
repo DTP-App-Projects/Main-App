@@ -1,247 +1,156 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+
+import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:digital_trade_portal/core/shared_cubits/change_language/change_language_cubit.dart';
-import 'package:digital_trade_portal/core/shared_cubits/change_language/change_language_states.dart';
-import 'package:digital_trade_portal/core/utils/services/local_services/cache_keys.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:digital_trade_portal/features/auth/presentation/view_models/auth/auth_cubit.dart';
-import 'package:digital_trade_portal/features/main_layout/presenation/view_model/change_nav_bar_status/change_nav_bar_status_cubit.dart';
-import 'package:digital_trade_portal/firebase_options.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+import 'core/deeplink/deep_link.dart';
+import 'core/push/push_service.dart';
+import 'core/session/session_cubit.dart';
+import 'core/session/session_store.dart';
 import 'core/utils/roots/app_router.dart';
 import 'core/utils/services/local_services/cache_helper.dart';
+import 'core/utils/services/local_services/cache_keys.dart';
 import 'core/utils/services/remote_services/service_locator.dart';
 import 'core/utils/theme/app_theme.dart';
+import 'core/workspace/workspace.dart';
+import 'core/workspace/workspace_cubit.dart';
+import 'core/workspace/workspace_state.dart';
+import 'features/shared/notifications/presentation/view_models/notifications_cubit.dart';
+import 'firebase_options.dart';
 
-// Local Notifications plugin
-final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
 
-// Background handler for FCM
+const AndroidNotificationDetails _androidChannel = AndroidNotificationDetails(
+  'dtp_channel_id',
+  'DigitalTradePortal',
+  channelDescription: 'dtp_channel_description',
+  importance: Importance.max,
+  priority: Priority.high,
+  icon: 'notification_icon',
+  colorized: true,
+  color: Color(0xFF1E56A0),
+);
+
+const NotificationDetails _notificationDetails = NotificationDetails(
+  android: _androidChannel,
+  iOS: DarwinNotificationDetails(presentAlert: true, presentBadge: true, presentSound: true),
+);
+
 @pragma('vm:entry-point')
-Future _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  // On iOS, background messages with a notification payload are handled
-  // automatically by the system — no need to show a local notification.
-  // Only show local notifications for data-only messages.
-  if (message.notification == null) {
-    final title = message.data['title'];
-    final body = message.data['body'];
-    if (title != null && body != null) {
-      flutterLocalNotificationsPlugin.show(
-        id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        title: title,
-        body: body,
-        notificationDetails: const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'dtp_channel_id',
-            'DigitalTradePortal',
-            channelDescription: 'dtp_channel_description',
-            importance: Importance.max,
-            priority: Priority.high,
-            icon: 'notification_icon',
-            colorized: true,
-            color: Color(0xff03745f),
-          ),
-          // ✅ إضافة إعدادات iOS للإشعارات المحلية
-          iOS: DarwinNotificationDetails(presentAlert: true, presentBadge: true, presentSound: true),
-        ),
-      );
-    }
-  }
+  // iOS renders notification-payload messages itself; only data-only messages
+  // need a local notification.
+  if (message.notification == null) _showDataNotification(message);
 }
 
-// Show a local notification for messages with a notification section
-void _showLocalNotification(RemoteMessage message) {
-  const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-    'dtp_channel_id',
-    'DigitalTradePortal',
-    channelDescription: 'dtp_channel_description',
-    importance: Importance.max,
-    priority: Priority.high,
-    icon: 'notification_icon',
-    colorized: true,
-    color: Color(0xff03745f),
-  );
-
-  // ✅ إضافة إعدادات iOS للإشعارات المحلية
-  const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
-    presentAlert: true,
-    presentBadge: true,
-    presentSound: true,
-  );
-
-  const NotificationDetails platformDetails = NotificationDetails(android: androidDetails, iOS: iosDetails);
-
+void _showDataNotification(RemoteMessage message) {
+  final title = message.data['title'];
+  final body = message.data['body'];
+  if (title == null && body == null) return;
   flutterLocalNotificationsPlugin.show(
-    id: message.notification?.hashCode ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    title: message.notification?.title,
-    body: message.notification?.body,
-    notificationDetails: platformDetails,
+    id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    title: title,
+    body: body,
+    notificationDetails: _notificationDetails,
+    // Carry the routing keys through, so a tap on a locally-rendered
+    // notification deep-links exactly like a tap on a system one.
+    payload: jsonEncode(message.data),
   );
 }
 
-Future<void> _safeSubscribeToTopic(String topic) async {
-  try {
-    // ✅ على iOS لازم نستنى الـ APNs token الأول قبل ما نجيب FCM token
-    if (Platform.isIOS) {
-      String? apnsToken = await FirebaseMessaging.instance.getAPNSToken();
-      if (apnsToken == null) {
-        debugPrint('Waiting for APNs token...');
-        // ننتظر شوية ونحاول تاني
-        await Future.delayed(const Duration(seconds: 3));
-        apnsToken = await FirebaseMessaging.instance.getAPNSToken();
-        if (apnsToken == null) {
-          debugPrint('APNs token still null — cannot get FCM token on iOS');
-          return;
-        }
-      }
-      debugPrint('APNs Token: $apnsToken');
-    }
-
-    String? token = await FirebaseMessaging.instance.getToken();
-    if (token != null) {
-      await CacheHelper.saveData(key: "deviceToken", value: token);
-      debugPrint("Device Token: $token");
-      await FirebaseMessaging.instance.subscribeToTopic(topic);
-      debugPrint('Successfully subscribed to topic: $topic');
-    } else {
-      debugPrint('Failed to get device token, cannot subscribe to topic');
-    }
-  } catch (e) {
-    debugPrint('Error subscribing to topic $topic: $e');
-  }
-}
-
-Future main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await EasyLocalization.ensureInitialized();
   await CacheHelper.init();
 
-  // Initialize Firebase
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // Arabic is the server's default and the app's; only an explicit choice
+  // changes it.
+  if (CacheHelper.getData(key: CacheKeys.language) == null) {
+    await CacheHelper.saveData(key: CacheKeys.language, value: 'ar');
+  }
 
-  // ✅ تسجيل background handler قبل أي حاجة تانية
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-  // Initialize local notifications
-  const AndroidInitializationSettings androidInitSettings = AndroidInitializationSettings('notification_icon');
-  const DarwinInitializationSettings iosInitSettings = DarwinInitializationSettings(
-    requestAlertPermission: true,
-    requestBadgePermission: true,
-    requestSoundPermission: true,
-  );
-  const InitializationSettings initSettings = InitializationSettings(
-    android: androidInitSettings,
-    iOS: iosInitSettings,
-  );
-  await flutterLocalNotificationsPlugin.initialize(
-    settings: initSettings,
-    onDidReceiveNotificationResponse: (NotificationResponse response) {
-      debugPrint('Tapped notification payload: ${response.payload}');
-    },
-  );
+  // The locator comes first: the notification handlers reach into it.
+  await setup();
+  await _initNotifications();
 
-  // ✅ طلب صلاحيات iOS للإشعارات المحلية مع await
-  if (Platform.isIOS) {
-    final bool? granted = await flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
-        ?.requestPermissions(alert: true, badge: true, sound: true);
-    debugPrint('iOS local notification permissions granted: $granted');
-  }
+  // Cold start: fetch the device token, then restore the session and
+  // bootstrap. Registration with both token tables happens once bootstrap
+  // resolves an organization.
+  await getIt<PushService>().initialize();
+  unawaited(getIt<PushService>().attachTapHandlers());
+  unawaited(getIt<SessionCubit>().start());
 
-  // ✅ طلب صلاحيات Firebase Messaging مع await
-  FirebaseMessaging messaging = FirebaseMessaging.instance;
-  NotificationSettings settings = await messaging.requestPermission(
-    alert: true,
-    announcement: false,
-    badge: true,
-    carPlay: false,
-    criticalAlert: false,
-    provisional: false,
-    sound: true,
-  );
-  debugPrint('Firebase Messaging permission status: ${settings.authorizationStatus}');
-
-  // ✅ ضبط عرض الإشعارات في الـ foreground مع await
-  await messaging.setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
-
-  // Handlers
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-    debugPrint('onMessage received: ${message.messageId}');
-    // ✅ على iOS لما التطبيق في الـ foreground:
-    // setForegroundNotificationPresentationOptions بيتكفل بالعرض
-    // للـ messages اللي فيها notification payload.
-    // بس لو عايز تتحكم أكتر، ممكن تعرض local notification:
-    if (message.notification != null) {
-      // على Android بنعرض local notification عشان مفيش
-      // setForegroundNotificationPresentationOptions
-      if (Platform.isAndroid) {
-        _showLocalNotification(message);
-      }
-      // على iOS الـ system بيعرض الإشعار تلقائياً بسبب
-      // setForegroundNotificationPresentationOptions
-      // لو عايز تعرضه manual برضو على iOS، شيل الـ if condition
-    }
-
-    // ✅ لو data-only message، اعرضها على كل الأنظمة
-    if (message.notification == null) {
-      final title = message.data['title'];
-      final body = message.data['body'];
-      if (title != null && body != null) {
-        flutterLocalNotificationsPlugin.show(
-          id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-          title: title,
-          body: body,
-          notificationDetails: const NotificationDetails(
-            android: AndroidNotificationDetails(
-              'dtp_channel_id',
-              'DigitalTradePortal',
-              channelDescription: 'dtp_channel_description',
-              importance: Importance.max,
-              priority: Priority.high,
-              icon: 'notification_icon',
-              colorized: true,
-              color: Color(0xff03745f),
-            ),
-            iOS: DarwinNotificationDetails(presentAlert: true, presentBadge: true, presentSound: true),
-          ),
-        );
-      }
-    }
-  });
-
-  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    debugPrint('onMessageOpenedApp data: ${message.data}');
-  });
-
-  // ✅ التعامل مع الإشعار اللي فتح التطبيق وهو مغلق
-  RemoteMessage? initialMessage = await messaging.getInitialMessage();
-  if (initialMessage != null) {
-    debugPrint('App opened from terminated state with data: ${initialMessage.data}');
-    // هنا ممكن تعمل navigation بناءً على الـ data
-  }
-
-  _safeSubscribeToTopic('all');
-
-  if (CacheKeysManger.getUserLanguage().isEmpty) {
-    await CacheHelper.saveData(key: 'lang', value: 'ar');
-  }
-
-  setup();
   runApp(
     EasyLocalization(
-      supportedLocales: const [Locale("ar"), Locale("en")],
+      supportedLocales: const [Locale('ar'), Locale('en')],
       saveLocale: true,
-      startLocale: Locale("ar"),
-      path: "lib/core/language",
+      startLocale: Locale(getIt<SessionStore>().locale),
+      fallbackLocale: const Locale('ar'),
+      path: 'lib/core/language',
       child: const DigitalTradePortal(),
     ),
   );
+}
+
+Future<void> _initNotifications() async {
+  const initSettings = InitializationSettings(
+    android: AndroidInitializationSettings('notification_icon'),
+    iOS: DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    ),
+  );
+  await flutterLocalNotificationsPlugin.initialize(
+    settings: initSettings,
+    onDidReceiveNotificationResponse: (response) {
+      final payload = response.payload;
+      if (payload == null || payload.isEmpty) return;
+      try {
+        final data = (jsonDecode(payload) as Map).cast<String, dynamic>();
+        unawaited(getIt<PushService>().openLink(DeepLink.fromData(data)));
+      } catch (e) {
+        debugPrint('Unreadable notification payload: $e');
+      }
+    },
+  );
+
+  final messaging = FirebaseMessaging.instance;
+  await messaging.requestPermission(alert: true, badge: true, sound: true);
+  await messaging.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
+
+  FirebaseMessaging.onMessage.listen((message) {
+    // Badge first: the user may never open the banner.
+    getIt<PushService>().onForegroundMessage(message);
+
+    if (message.notification != null) {
+      if (!Platform.isAndroid) return; // iOS presents it itself.
+      flutterLocalNotificationsPlugin.show(
+        id: message.notification.hashCode,
+        title: message.notification?.title,
+        body: message.notification?.body,
+        notificationDetails: _notificationDetails,
+        payload: jsonEncode(message.data),
+      );
+      return;
+    }
+    _showDataNotification(message);
+  });
 }
 
 class DigitalTradePortal extends StatelessWidget {
@@ -251,22 +160,28 @@ class DigitalTradePortal extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiBlocProvider(
       providers: [
-        BlocProvider(create: (context) => AuthCubit()),
-        BlocProvider(create: (context) => ChangeLanguageCubit()),
-        BlocProvider(create: (context) => ChangeNavBarStatusCubit()),
+        BlocProvider.value(value: getIt<WorkspaceCubit>()),
+        BlocProvider.value(value: getIt<SessionCubit>()),
+        BlocProvider.value(value: getIt<NotificationsCubit>()),
       ],
-      child: BlocBuilder<ChangeLanguageCubit, ChangeLanguageStates>(
-        builder: (context, langState) {
+      // The theme is per-workspace and server-driven: switching sides must
+      // visibly recolour the app.
+      child: BlocBuilder<WorkspaceCubit, WorkspaceState?>(
+        buildWhen: (previous, current) => previous?.theme != current?.theme,
+        builder: (context, workspace) {
+          final tokens = workspace?.theme ?? ThemeTokens.fallbackFor(Workspace.trader);
           return MaterialApp.router(
-            title: "Tajer Id",
-            theme: themeDataLight,
-            builder: (context, child) {
-              return MediaQuery(
-                data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(1)),
-                child: child!,
-              );
-            },
+            title: 'التكامل التجاري الرقمي',
             debugShowCheckedModeBanner: false,
+            theme: buildAppTheme(tokens, context.locale.languageCode),
+            // The same tokens, inverted: a warehouse aisle and a truck cab
+            // are where this app actually gets used.
+            darkTheme: buildAppTheme(
+              tokens,
+              context.locale.languageCode,
+              brightness: Brightness.dark,
+            ),
+            themeMode: ThemeMode.system,
             routerConfig: AppRouter.router,
             localizationsDelegates: context.localizationDelegates,
             supportedLocales: context.supportedLocales,

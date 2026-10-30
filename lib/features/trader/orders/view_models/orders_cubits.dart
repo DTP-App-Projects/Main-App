@@ -7,6 +7,7 @@ import '../../../../core/network/paged.dart';
 import '../../../../core/ui/form_status.dart';
 import '../../../../core/ui/paged_cubit.dart';
 import '../../../../core/workspace/workspace.dart';
+import '../../../../data/models/trade/document_flow.dart';
 import '../../../../data/models/trade/purchase_order.dart';
 import '../../../../data/repositories/orders_repository.dart';
 
@@ -42,7 +43,23 @@ class OrderDetailState {
   final bool offline;
   final SubmitState action;
 
+  /// The stable code of the last failed action — the screen guides the user
+  /// on the compliance refusals (no framework agreement, supply suspended,
+  /// credit limit exceeded).
+  final String actionCode;
+
+  /// `GET /purchase_orders/{id}/timeline` — the full history, the
+  /// cancellation request's notes included. Falls back to the detail's own.
+  final List<TimelineEvent>? timeline;
+
+  /// The documents around the order (shipments, receipts, invoices,
+  /// payments). Optional: empty when the server has none to show.
+  final DocumentFlow flow;
+
   const OrderDetailState({
+    this.timeline,
+    this.flow = DocumentFlow.empty,
+    this.actionCode = '',
     this.loading = true,
     this.order,
     this.errorMessage,
@@ -57,8 +74,14 @@ class OrderDetailState {
     bool? offline,
     SubmitState? action,
     bool clearError = false,
+    String? actionCode,
+    List<TimelineEvent>? timeline,
+    DocumentFlow? flow,
   }) =>
       OrderDetailState(
+        timeline: timeline ?? this.timeline,
+        flow: flow ?? this.flow,
+        actionCode: actionCode ?? this.actionCode,
         loading: loading ?? this.loading,
         order: order ?? this.order,
         errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
@@ -78,34 +101,63 @@ class OrderDetailCubit extends Cubit<OrderDetailState> {
 
   OrderDetailCubit(this._repo, this.orderId) : super(const OrderDetailState());
 
+  /// The order, then its timeline, then the document chain — in sequence
+  /// (the request budget is per minute). Every action ends here: the screen
+  /// shows what the server now says, never a locally patched copy.
   Future<void> load() async {
     emit(state.copyWith(loading: true, clearError: true, offline: false));
 
     final result = await _repo.order(orderId);
     if (result case Ok(:final data)) {
       emit(state.copyWith(loading: false, order: data));
+    } else {
+      emit(state.copyWith(
+        loading: false,
+        offline: result.isOffline,
+        errorMessage: result.failureMessage,
+      ));
       return;
     }
-    emit(state.copyWith(
-      loading: false,
-      offline: result.isOffline,
-      errorMessage: result.failureMessage,
-    ));
+
+    final timeline = await _repo.timeline(orderId);
+    if (isClosed) return;
+    if (timeline case Ok(:final data) when data.isNotEmpty) emit(state.copyWith(timeline: data));
+
+    final flow = await _repo.documentFlow('purchase_order', orderId);
+    if (isClosed) return;
+    if (flow case Ok(:final data)) emit(state.copyWith(flow: data));
   }
+
+  /// The timeline to draw: the endpoint's, else the one on the detail.
+  List<TimelineEvent> get timeline => state.timeline ?? state.order?.timeline ?? const [];
 
   /// A transition the server listed. [note] is mandatory for the ones named
   /// in `reason_required_for` — 3 to 500 characters.
-  Future<bool> changeStatus(String status, {String? note}) async {
+  Future<bool> changeStatus(String status, {String? note, String? otpCode}) async {
     if (state.action.isSubmitting) return false;
-    emit(state.copyWith(action: const SubmitState(status: FormStatus.submitting)));
+    emit(state.copyWith(action: const SubmitState(status: FormStatus.submitting), actionCode: ''));
 
-    final result = await _repo.changeStatus(id: orderId, status: status, note: note);
-    if (result case Ok(:final data)) {
-      emit(state.copyWith(order: data, action: const SubmitState()));
+    final result = await _repo.changeStatus(id: orderId, status: status, note: note, otpCode: otpCode);
+    if (result is Ok<PurchaseOrder> || result is NoContent<PurchaseOrder>) {
+      emit(state.copyWith(action: const SubmitState()));
+      await load();
       return true;
     }
-    emit(state.copyWith(action: result.failureState));
+    emit(state.copyWith(action: result.failureState, actionCode: result.failureCode));
     return false;
+  }
+
+  /// The OTP sheet posts the transition itself and keeps a rejection on the
+  /// sheet; this is its submit, reporting the raw result back to it.
+  Future<ApiResult<PurchaseOrder>> changeStatusWithOtp(String status, String otpCode, {String? note}) async {
+    final result = await _repo.changeStatus(id: orderId, status: status, note: note, otpCode: otpCode);
+    if (result is Ok<PurchaseOrder> || result is NoContent<PurchaseOrder>) {
+      emit(state.copyWith(action: const SubmitState(), actionCode: ''));
+      await load();
+    } else {
+      emit(state.copyWith(actionCode: result.failureCode));
+    }
+    return result;
   }
 
   /// The selling side answers a cancellation request: `accepted` or

@@ -3,6 +3,63 @@ import '../trade/supplier_summary.dart';
 
 /// A trading contract. An **active** one is half of what
 /// `order_entry_ready` checks — without it a trader cannot order at all.
+/// One pending purchase-order approval step, from `GET /v2/approvals`
+/// (`purchase_orders[]`). The row shape was not published and staging had
+/// none on 2026-10-06, so every field is read defensively.
+class PurchaseOrderApproval {
+  final int id;
+  final int? purchaseOrderId;
+  final String orderCode;
+  final String status;
+
+  /// The step's own label (role or level), when the server names it.
+  final String stepLabel;
+  final double? amount;
+  final String counterpartyName;
+
+  const PurchaseOrderApproval({
+    required this.id,
+    this.purchaseOrderId,
+    this.orderCode = '',
+    this.status = '',
+    this.stepLabel = '',
+    this.amount,
+    this.counterpartyName = '',
+  });
+
+  factory PurchaseOrderApproval.fromJson(Map<String, dynamic> j) {
+    final order = asMap(j['purchase_order']);
+    final party = asMap(order['supplier'] ?? order['trader'] ?? j['counterparty']);
+    return PurchaseOrderApproval(
+      id: asInt(j['id']),
+      purchaseOrderId: asIntOrNull(j['purchase_order_id'] ?? order['id']),
+      orderCode: asStr(order['code'] ?? j['purchase_order_code'] ?? j['code']),
+      status: asStr(j['status']),
+      stepLabel: unwrap(j['step_label'] ?? j['role_label'] ?? j['label'] ?? j['approver_role']),
+      amount: (order['grand_total'] ?? j['amount']) == null ? null : asNum(order['grand_total'] ?? j['amount']),
+      counterpartyName: unwrap(party['display_name'] ?? party['name']),
+    );
+  }
+
+  bool get isPending => status.isEmpty || status == 'pending';
+}
+
+/// `GET /v2/approvals` → `{contracts, purchase_orders, counts}` — the
+/// organization's «صندوق الموافقات» (guide Part 8.7).
+class ApprovalsInbox {
+  final List<Contract> contracts;
+  final List<PurchaseOrderApproval> purchaseOrders;
+
+  const ApprovalsInbox({this.contracts = const [], this.purchaseOrders = const []});
+
+  factory ApprovalsInbox.fromJson(Map<String, dynamic> j) => ApprovalsInbox(
+        contracts: asList(j['contracts'], Contract.fromJson),
+        purchaseOrders: asList(j['purchase_orders'], PurchaseOrderApproval.fromJson),
+      );
+
+  int get total => contracts.length + purchaseOrders.length;
+}
+
 class Contract {
   final int id;
   final int? businessRelationshipId;

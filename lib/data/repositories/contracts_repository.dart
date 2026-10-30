@@ -96,9 +96,12 @@ class ContractsRepository {
       );
 
   /// The combined inbox: contracts plus pending purchase-order approvals.
-  Future<ApiResult<List<Contract>>> approvalsInbox() => _client.get<List<Contract>>(
+  /// Both kinds of pending approval: contracts and purchase orders. It used
+  /// to read `contracts` only and drop the orders.
+  Future<ApiResult<ApprovalsInbox>> approvalsInbox() => _client.get<ApprovalsInbox>(
         ApiPaths.approvals,
-        parse: (body) => asList(asMap(body)['contracts'], Contract.fromJson),
+        dedupe: false,
+        parse: (body) => ApprovalsInbox.fromJson(asMap(body)),
       );
 
   Future<ApiResult<void>> decideOrderApproval({

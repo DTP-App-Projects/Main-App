@@ -96,18 +96,23 @@ void main() {
       expect(org.commercialRegNo, '1010101010');
     });
 
-    test('the step is complete only when all four required fields are filled', () {
+    test('the step needs the four server fields and the commercial registration', () {
       const required = {
         'id': 1,
         'legal_name_ar': 'شركة الاختبار',
         'trade_name': 'Test',
         'country_id': 1,
         'city_id': 2,
+        'commercial_reg_no': '1010101010',
       };
       expect(Organization.fromJson(required).hasLegalIdentity, isTrue);
 
       final missingCity = Map<String, dynamic>.from(required)..remove('city_id');
       expect(Organization.fromJson(missingCity).hasLegalIdentity, isFalse);
+
+      // «السجل التجاري *» (guide Part 2.1).
+      final missingCr = Map<String, dynamic>.from(required)..remove('commercial_reg_no');
+      expect(Organization.fromJson(missingCr).hasLegalIdentity, isFalse);
     });
   });
 

@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../data/models/auth/auth_user.dart';
 import '../../data/models/bootstrap/organization.dart';
 import '../../data/repositories/bootstrap_repository.dart';
+import '../network/api_result.dart';
 import '../push/push_service.dart';
 import '../workspace/workspace_cubit.dart';
 import 'session_state.dart';
@@ -45,10 +46,16 @@ class SessionCubit extends Cubit<SessionState> {
 
   /// Re-fetch bootstrap. Called on login, org switch and app resume — never on
   /// a workspace switch.
-  Future<void> refresh() async {
-    emit(state.copyWith(status: SessionStatus.loading, clearError: true));
+  ///
+  /// [silent] re-reads without passing through `loading`, which the router
+  /// answers with the splash screen — tearing down whatever screen asked.
+  /// A silent refresh that fails keeps the session it had.
+  Future<void> refresh({bool silent = false}) async {
+    if (!silent) emit(state.copyWith(status: SessionStatus.loading, clearError: true));
 
     final result = await _bootstrapRepo.fetch();
+
+    if (silent && result is! Ok && result is! SessionExpired) return;
 
     await result.when(
       ok: (bootstrap) async {

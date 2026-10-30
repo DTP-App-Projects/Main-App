@@ -8,8 +8,10 @@ import 'package:go_router/go_router.dart';
 import '../../../core/ui/ui.dart';
 import '../../../core/utils/roots/app_router.dart';
 import '../../../core/utils/services/remote_services/service_locator.dart';
+import '../../../data/models/lookups/lookup_item.dart';
 import '../../../data/models/trade/catalog.dart';
 import '../../../data/repositories/catalog_repository.dart';
+import '../../../data/repositories/lookups_repository.dart';
 import '../../../data/repositories/supplier_repository.dart';
 import '../view_models/supplier_cubits.dart';
 
@@ -131,6 +133,7 @@ class SkuRulesView extends StatelessWidget {
           getIt<CatalogRepository>(),
           getIt<SupplierRepository>(),
           productId,
+          getIt<LookupsRepository>(),
         )..load(),
         child: const _SkuRulesBody(),
       );
@@ -172,7 +175,6 @@ class _SkuRulesBody extends StatelessWidget {
                 AppTokens.space8,
               ),
               children: [
-                FormMessage(message: state.action.message),
                 const _RulesWarning(),
                 if (product.skus.isEmpty)
                   AppCard(
@@ -220,6 +222,26 @@ class _SkuRulesCardState extends State<_SkuRulesCard> {
   late bool _barcodeRequired = widget.sku.barcodeRequired;
   bool _expanded = false;
 
+  // Sent only when edited (see [SkuRulesCubit.save]).
+  late final Set<int> _sectors = widget.sku.businessSectorIds.toSet();
+  bool _sectorsChanged = false;
+  late final List<SkuTier> _tiers = [...widget.sku.generalTiers];
+  bool _tiersChanged = false;
+
+  Future<void> _addTier() async {
+    final terms = context.read<SkuRulesCubit>().state.paymentTerms;
+    final tier = await showAppSheet<SkuTier>(
+      context: context,
+      title: 'supplier_catalog.add_tier'.tr(),
+      builder: (_) => _TierForm(paymentTerms: terms),
+    );
+    if (tier == null || !mounted) return;
+    setState(() {
+      _tiers.add(tier);
+      _tiersChanged = true;
+    });
+  }
+
   @override
   void dispose() {
     for (final controller in [_minQty, _stepQty, _packQty, _barcode]) {
@@ -237,6 +259,18 @@ class _SkuRulesCardState extends State<_SkuRulesCard> {
           skuStatus: _status,
           barcode: _barcode.text.trim(),
           barcodeRequired: _barcodeRequired,
+          businessSectorIds: _sectorsChanged ? _sectors.toList() : null,
+          tiers: _tiersChanged
+              ? [
+                  for (final t in _tiers)
+                    SkuTierInput(
+                      paymentTermId: t.paymentTermId,
+                      minQty: t.minQty,
+                      maxQty: t.maxQty,
+                      finalPrice: t.finalPrice,
+                    ),
+                ]
+              : null,
         );
     if (saved && mounted) setState(() => _expanded = false);
   }
@@ -288,6 +322,26 @@ class _SkuRulesCardState extends State<_SkuRulesCard> {
               label: 'catalog.pack_quantity'.tr(),
               value: Text(_fmt(widget.sku.packQuantity), textDirection: TextDirection.ltr),
             ),
+            // «جاهزية الـSKU» — what still stops traders from ordering it.
+            const SizedBox(height: AppTokens.space2),
+            Wrap(
+              spacing: AppTokens.space2,
+              runSpacing: AppTokens.space2,
+              children: [
+                AppBadge(
+                  widget.sku.isReadyToSell
+                      ? 'supplier_catalog.ready'.tr()
+                      : 'supplier_catalog.incomplete'.tr(),
+                  tone: widget.sku.isReadyToSell ? AppTone.brand : AppTone.warning,
+                ),
+                for (final entry in widget.sku.readiness.entries)
+                  AppBadge(
+                    'supplier_catalog.check_${entry.key}'.tr(),
+                    tone: entry.value ? AppTone.neutral : AppTone.warning,
+                    icon: entry.value ? Icons.check_rounded : Icons.close_rounded,
+                  ),
+              ],
+            ),
             Align(
               alignment: AlignmentDirectional.centerEnd,
               child: AppButton.text(
@@ -337,6 +391,75 @@ class _SkuRulesCardState extends State<_SkuRulesCard> {
               value: _barcodeRequired,
               onChanged: (value) => setState(() => _barcodeRequired = value),
             ),
+            // Eligible sectors for this SKU.
+            Builder(builder: (context) {
+              final sectors = context.watch<SkuRulesCubit>().state.sectors;
+              if (sectors.isEmpty) return const SizedBox.shrink();
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: AppTokens.space2),
+                  Text('supplier_catalog.sectors'.tr(), style: theme.textTheme.labelLarge),
+                  const SizedBox(height: AppTokens.space2),
+                  Wrap(
+                    spacing: AppTokens.space2,
+                    runSpacing: AppTokens.space2,
+                    children: [
+                      for (final sector in sectors)
+                        FilterChip(
+                          label: Text(sector.label(widget.locale)),
+                          selected: _sectors.contains(sector.id),
+                          onSelected: (selected) => setState(() {
+                            selected ? _sectors.add(sector.id) : _sectors.remove(sector.id);
+                            _sectorsChanged = true;
+                          }),
+                        ),
+                    ],
+                  ),
+                  if (submit.fieldError('business_sector_ids') case final error?)
+                    Text(error, style: theme.textTheme.labelSmall?.copyWith(color: t.fieldError)),
+                ],
+              );
+            }),
+            // «شرائح السعر العامة»: payment term · from · to · final price.
+            const SizedBox(height: AppTokens.space4),
+            Row(
+              children: [
+                Expanded(child: Text('supplier_catalog.tiers'.tr(), style: theme.textTheme.labelLarge)),
+                AppButton.text(
+                  label: 'supplier_catalog.add_tier'.tr(),
+                  icon: Icons.add_rounded,
+                  height: 36,
+                  onPressed: _addTier,
+                ),
+              ],
+            ),
+            if (_tiers.isEmpty)
+              Text('supplier_catalog.no_tiers'.tr(), style: theme.textTheme.bodySmall?.copyWith(color: t.textSecondary))
+            else
+              for (var i = 0; i < _tiers.length; i++)
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${_tiers[i].paymentTermLabel.isEmpty ? 'supplier_catalog.any_term'.tr() : _tiers[i].paymentTermLabel}'
+                        ' · ${_fmt(_tiers[i].minQty)}–${_tiers[i].maxQty == null ? '∞' : _fmt(_tiers[i].maxQty!)}',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+                    MoneyText(_tiers[i].finalPrice, style: theme.textTheme.titleSmall),
+                    IconButton(
+                      tooltip: 'common.delete'.tr(),
+                      icon: Icon(Icons.close_rounded, size: 18, color: t.danger),
+                      onPressed: () => setState(() {
+                        _tiers.removeAt(i);
+                        _tiersChanged = true;
+                      }),
+                    ),
+                  ],
+                ),
+            if (submit.fieldError('tiers') case final error?)
+              Text(error, style: theme.textTheme.labelSmall?.copyWith(color: t.fieldError)),
             const SizedBox(height: AppTokens.space3),
             CodePicker(
               label: 'supplier_catalog.sku_status'.tr(),
@@ -346,6 +469,8 @@ class _SkuRulesCardState extends State<_SkuRulesCard> {
               error: submit.fieldError('sku_status'),
               onChanged: (value) => setState(() => _status = value),
             ),
+            // The save's error, right above the card's own buttons.
+            FormMessage(message: submit.message),
             Row(
               children: [
                 Expanded(
@@ -388,4 +513,122 @@ class _RulesWarning extends StatelessWidget {
         tone: AppTone.info,
         margin: margin,
       );
+}
+
+/// One general price tier: payment term (optional), quantity band, price.
+class _TierForm extends StatefulWidget {
+  final List<LookupItem> paymentTerms;
+
+  const _TierForm({required this.paymentTerms});
+
+  @override
+  State<_TierForm> createState() => _TierFormState();
+}
+
+class _TierFormState extends State<_TierForm> {
+  final _formKey = GlobalKey<FormState>();
+  final _min = TextEditingController(text: '1');
+  final _max = TextEditingController();
+  final _price = TextEditingController();
+  int? _termId;
+
+  @override
+  void dispose() {
+    for (final c in [_min, _max, _price]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  String? _positive(String? value) {
+    final n = double.tryParse((value ?? '').trim());
+    if (n == null) return 'validation.required'.tr();
+    return n <= 0 ? 'supplier_catalog.positive'.tr() : null;
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    final min = double.parse(_min.text.trim());
+    final max = double.tryParse(_max.text.trim());
+    if (max != null && max < min) {
+      setState(() {});
+      return;
+    }
+    final locale = context.locale.toString();
+    LookupItem? term;
+    for (final t in widget.paymentTerms) {
+      if (t.id == _termId) term = t;
+    }
+    Navigator.of(context).pop(SkuTier(
+      paymentTermId: _termId,
+      paymentTermLabel: term?.label(locale) ?? '',
+      minQty: min,
+      maxQty: max,
+      finalPrice: double.parse(_price.text.trim()),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locale = context.locale.toString();
+    return Form(
+      key: _formKey,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          IdPicker<LookupItem>(
+            label: 'order.payment_term'.tr(),
+            value: _termId,
+            items: widget.paymentTerms,
+            idOf: (t) => t.id,
+            labelOf: (t) => t.label(locale),
+            required: false,
+            onChanged: (id) => setState(() => _termId = id),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: AppField(
+                  controller: _min,
+                  label: 'supplier_catalog.from_qty'.tr(),
+                  required: true,
+                  textDirection: TextDirection.ltr,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  validator: _positive,
+                ),
+              ),
+              const SizedBox(width: AppTokens.space3),
+              Expanded(
+                child: AppField(
+                  controller: _max,
+                  label: 'supplier_catalog.to_qty'.tr(),
+                  hint: 'common.optional'.tr(),
+                  textDirection: TextDirection.ltr,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  validator: (value) {
+                    final max = double.tryParse((value ?? '').trim());
+                    final min = double.tryParse(_min.text.trim());
+                    if (max == null || min == null) return null;
+                    return max < min ? 'supplier_catalog.max_below_min'.tr() : null;
+                  },
+                ),
+              ),
+            ],
+          ),
+          AppField(
+            controller: _price,
+            label: 'supplier_catalog.final_price'.tr(),
+            required: true,
+            suffixText: 'SAR',
+            textDirection: TextDirection.ltr,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            validator: _positive,
+          ),
+          AppButton.primary(label: 'supplier_catalog.add_tier'.tr(), onPressed: _submit),
+        ],
+      ),
+    );
+  }
 }

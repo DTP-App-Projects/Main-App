@@ -52,6 +52,24 @@ class Money implements Comparable<Money> {
   factory Money.fromMajor(num amount, {String currency = AppMoney.defaultCurrency}) =>
       Money((amount * 100).round(), currency: currency);
 
+  /// From the 2-decimal string the newer endpoints send (`"38250.00"`),
+  /// parsed digit by digit so no amount passes through a `double`. A number
+  /// on the wire (older endpoints) goes through [Money.fromMajor].
+  factory Money.parse(dynamic raw, {String currency = AppMoney.defaultCurrency}) {
+    if (raw is num) return Money.fromMajor(raw, currency: currency);
+    final s = (raw ?? '').toString().trim().replaceAll(',', '');
+    final match = RegExp(r'^(-?)(\d*)(?:\.(\d*))?$').firstMatch(s);
+    if (match == null || (match[2]!.isEmpty && (match[3] ?? '').isEmpty)) {
+      return Money(0, currency: currency);
+    }
+    final whole = int.parse(match[2]!.isEmpty ? '0' : match[2]!);
+    final fraction = (match[3] ?? '').padRight(3, '0');
+    // Half-up on the third decimal; the server already rounds to two.
+    var minor = whole * 100 + int.parse(fraction.substring(0, 2));
+    if (int.parse(fraction[2]) >= 5) minor += 1;
+    return Money(match[1] == '-' ? -minor : minor, currency: currency);
+  }
+
   static const zero = Money(0);
 
   double get major => minorUnits / 100;
@@ -82,10 +100,7 @@ class Money implements Comparable<Money> {
   }
 
   void _assertSame(Money other) {
-    assert(
-      other.currency == currency,
-      'Refusing to mix $currency with ${other.currency}.',
-    );
+    assert(other.currency == currency, 'Refusing to mix $currency with ${other.currency}.');
   }
 
   @override

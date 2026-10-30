@@ -39,7 +39,13 @@ sealed class ApiResult<T> {
       Ok<T>() => throw StateError('castFailure() called on Ok'),
       NoContent<T>() => NoContent<R>(),
       Invalid<T>() => Invalid<R>(self.bag),
-      Failed<T>() => Failed<R>(self.code, self.status, permission: self.permission),
+      Failed<T>() => Failed<R>(
+          self.code,
+          self.status,
+          permission: self.permission,
+          message: self.message,
+          details: self.details,
+        ),
       WrongWorkspace<T>() => WrongWorkspace<R>(),
       Offline<T>() => Offline<R>(),
       RateLimited<T>() => RateLimited<R>(self.retryAfter),
@@ -59,11 +65,27 @@ class NoContent<T> extends ApiResult<T> {
   const NoContent();
 }
 
-/// `400 {"msg":"validation_error","bag":{...}}`. There is no `422` here.
+/// `400 {"msg":"validation_error","bag":{...}}`. A `422` is a business rule,
+/// not validation — it arrives as [Failed].
 /// Key off the field names, never the message text.
 class Invalid<T> extends ApiResult<T> {
   final Map<String, List<String>> bag;
-  const Invalid(this.bag);
+
+  /// The server's own sentence for the whole request, when it sends one —
+  /// `profile/submit` explains itself in `text` with an empty bag.
+  final String? text;
+
+  const Invalid(this.bag, {this.text});
+
+  /// What to show above the form: the server's `text`, else the first
+  /// message in the bag, else null (the caller falls back to a generic one).
+  String? get summary {
+    if (text != null && text!.isNotEmpty) return text;
+    for (final messages in bag.values) {
+      if (messages.isNotEmpty) return messages.first;
+    }
+    return null;
+  }
 
   String? first(String field) {
     final messages = bag[field];
@@ -71,8 +93,8 @@ class Invalid<T> extends ApiResult<T> {
   }
 }
 
-/// A business-rule rejection: a stable snake_case `msg`. Map it to localized
-/// copy — never show [code] to a user.
+/// A business-rule rejection: a stable snake_case `msg`. Branch on [code],
+/// never on [message] — and never show [code] to a user.
 class Failed<T> extends ApiResult<T> {
   final String code;
   final int status;
@@ -80,7 +102,16 @@ class Failed<T> extends ApiResult<T> {
   /// Set when `msg == 'permission_denied'`.
   final String? permission;
 
-  const Failed(this.code, this.status, {this.permission});
+  /// The server's own localized sentence (`message`), sent with compliance
+  /// rejections (`422 <code>`, `409 terms_acceptance_required`, …). Shown to
+  /// the user when we ship no copy of our own for [code].
+  final String? message;
+
+  /// The whole error body, for codes that carry context next to `msg` —
+  /// `terms: {...}` on the terms gate, limits on a credit rejection.
+  final Map<String, dynamic>? details;
+
+  const Failed(this.code, this.status, {this.permission, this.message, this.details});
 }
 
 /// `403 organization_workspace_not_allowed` — a navigation bug on our side,

@@ -35,7 +35,25 @@ class CatalogRepository {
   Future<ApiResult<SupplierSummary>> supplier(int supplierOrganizationId) =>
       _client.get<SupplierSummary>(
         ApiPaths.catalogSupplier(supplierOrganizationId),
-        parse: (body) => SupplierSummary.fromJson(asMap(asMap(body)['supplier'])),
+        parse: (body) {
+          final map = asMap(body);
+          final supplier = {...asMap(map['supplier'])};
+          // Live, this endpoint sends the link as a sibling —
+          // `{supplier, relationship: {id, status, classification, …}}` —
+          // and no `relationship_*` inside `supplier`. Without folding it in,
+          // a sent request read as "no relationship" and the screen kept
+          // offering to send it again.
+          final relationship = map['relationship'];
+          if (relationship is Map) {
+            final r = asMap(relationship);
+            supplier
+              ..putIfAbsent('relationship_id', () => r['id'])
+              ..putIfAbsent('relationship_status', () => r['status'])
+              ..putIfAbsent('relationship_classification', () => r['classification'])
+              ..putIfAbsent('active_contracts_count', () => r['active_contracts_count']);
+          }
+          return SupplierSummary.fromJson(supplier);
+        },
       );
 
   /// Browsable **before** a relationship exists — this is what a trader sees
@@ -67,23 +85,43 @@ class CatalogRepository {
 
   // ----------------------------------------------------------- relationships
 
-  /// Asks the supplier for a trading relationship. `as: trader` because this
-  /// is the buying side requesting it.
+  /// Asks the other side for a trading relationship — the website's «إرسال
+  /// طلب علاقة تجارية» (guide Part 6.2). It waits for the other side's
+  /// signatory to accept it with a verification code.
+  ///
+  /// [role] is this organization's side (`trader` buys, `supplier` sells).
+  /// [requestedModel] is `direct` (cash), `credit` or `consignment` — anything
+  /// else is `422 supply_model_invalid`. A credit request also carries the
+  /// term (1–365 days), the limit and the debt documentation
+  /// (`acknowledgment_only`, `promissory_note`, `both`); live, the request
+  /// record keeps them even though the returned `relationship` does not echo
+  /// them. Re-posting after a rejection reopens the same relationship.
   ///
   /// Quota-gated, and a blacklisted counterparty is refused outright.
   Future<ApiResult<BusinessRelationship>> requestRelationship({
-    required int supplierOrganizationId,
+    required int counterpartyOrganizationId,
+    String role = 'trader',
+    String requestedModel = 'direct',
+    int? creditTermDays,
+    double? creditLimit,
+    String? debtDocumentation,
     String? notes,
-  }) =>
-      _client.post<BusinessRelationship>(
-        ApiPaths.relationships,
-        body: {
-          'counterparty_organization_id': supplierOrganizationId,
-          'as': 'trader',
-          'notes': ?notes,
-        },
-        parse: (body) => BusinessRelationship.fromJson(asMap(asMap(body)['relationship'])),
-      );
+  }) {
+    final credit = requestedModel == 'credit';
+    return _client.post<BusinessRelationship>(
+      ApiPaths.relationships,
+      body: {
+        'counterparty_organization_id': counterpartyOrganizationId,
+        'as': role,
+        'requested_model': requestedModel,
+        if (credit) 'requested_credit_term_days': ?creditTermDays,
+        if (credit) 'requested_credit_limit': ?creditLimit,
+        if (credit) 'debt_documentation': ?debtDocumentation,
+        if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+      },
+      parse: (body) => BusinessRelationship.fromJson(asMap(asMap(body)['relationship'])),
+    );
+  }
 
   Future<ApiResult<BusinessRelationship>> relationship(int id) =>
       _client.get<BusinessRelationship>(

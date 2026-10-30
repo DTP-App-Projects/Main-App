@@ -10,6 +10,7 @@ import '../../../../../data/repositories/auth_repository.dart';
 import '../../../../../data/repositories/onboarding_repository.dart';
 import '../view_models/onboarding_form_cubits.dart';
 import 'widgets/collection_scaffold.dart';
+import 'widgets/location_picker.dart';
 import '../view_models/onboarding_cubit.dart';
 
 /// `POST /api/v2/onboarding/branches` — an upsert, so the same form both
@@ -19,14 +20,11 @@ class BranchesView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => BlocProvider(
-        create: (_) => BranchesCubit(
-          getIt<OnboardingRepository>(),
-          getIt<AuthRepository>(),
-        )
-          ..load()
-          ..loadCountries(),
-        child: const _BranchesBody(),
-      );
+    create: (_) => BranchesCubit(getIt<OnboardingRepository>(), getIt<AuthRepository>())
+      ..load()
+      ..loadCountries(),
+    child: const _BranchesBody(),
+  );
 }
 
 class _BranchesBody extends StatelessWidget {
@@ -50,7 +48,11 @@ class _BranchesBody extends StatelessWidget {
       itemBuilder: (branch) => CollectionTile(
         icon: Icons.store_outlined,
         title: branch.displayName(locale),
-        subtitle: branch.addressText,
+        // The pin is what puts a branch on a driver's route (guide 5.1).
+        subtitle: [
+          branch.addressText,
+          branch.hasLocation ? 'branch.location_set'.tr() : 'branch.location_missing'.tr(),
+        ].where((s) => s.isNotEmpty).join(' · '),
         trailing: branch.isDefault ? 'branch.default'.tr() : null,
         onTap: () => _openEditor(context, branch),
       ),
@@ -85,7 +87,7 @@ class _BranchForm extends StatefulWidget {
 
 class _BranchFormState extends State<_BranchForm> {
   /// The documented `branch_type` enum.
-  static const _types = ['hq', 'warehouse', 'store', 'delivery_point', 'shelf_location'];
+  static const _types = ['hq', 'warehouse', 'store', 'branch', 'delivery_point', 'shelf_location'];
 
   final _formKey = GlobalKey<FormState>();
   late final _nameAr = TextEditingController(text: widget.branch?.nameAr ?? '');
@@ -97,6 +99,9 @@ class _BranchFormState extends State<_BranchForm> {
   late String? _type = widget.branch?.type.isNotEmpty == true ? widget.branch!.type : 'hq';
   late int? _countryId = widget.branch?.countryId;
   late int? _cityId = widget.branch?.cityId;
+  late double? _latitude = widget.branch?.latitude;
+  late double? _longitude = widget.branch?.longitude;
+  late bool _isDefault = widget.branch?.isDefault ?? false;
 
   @override
   void dispose() {
@@ -114,16 +119,20 @@ class _BranchFormState extends State<_BranchForm> {
     if (_countryId == null || _cityId == null || _type == null) return;
 
     final saved = await context.read<BranchesCubit>().save(
-          branchId: widget.branch?.id,
-          branchType: _type!,
-          nameAr: _nameAr.text,
-          countryId: _countryId!,
-          cityId: _cityId!,
-          addressText: _address.text,
-          nameEn: _nameEn.text,
-          contactName: _contactName.text,
-          contactPhone: _contactPhone.text,
-        );
+      branchId: widget.branch?.id,
+      branchType: _type!,
+      nameAr: _nameAr.text,
+      countryId: _countryId!,
+      cityId: _cityId!,
+      addressText: _address.text,
+      nameEn: _nameEn.text,
+      contactName: _contactName.text,
+      contactPhone: _contactPhone.text,
+      latitude: _latitude,
+      longitude: _longitude,
+      // Only sent when it changes: the flag is the organization's.
+      isDefault: _isDefault != (widget.branch?.isDefault ?? false) ? _isDefault : null,
+    );
     if (saved && mounted) Navigator.of(context).pop();
   }
 
@@ -139,7 +148,6 @@ class _BranchFormState extends State<_BranchForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          FormMessage(message: submit.message),
           CodePicker(
             label: 'branch.type'.tr(),
             required: true,
@@ -192,6 +200,25 @@ class _BranchFormState extends State<_BranchForm> {
             validator: AppValidators.required,
             serverError: submit.fieldError('address_text'),
           ),
+          // «موقع الفرع على الخريطة» — what puts the branch on a driver's
+          // route. Its pair (or both null) is always sent: omitting them
+          // would keep a pin the user just cleared.
+          BranchLocationPicker(
+            initialLat: _latitude,
+            initialLng: _longitude,
+            addressController: _address,
+            error: submit.fieldError('latitude') ?? submit.fieldError('longitude'),
+            onChanged: (lat, lng) {
+              _latitude = lat;
+              _longitude = lng;
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('branch.make_default'.tr()),
+            value: _isDefault,
+            onChanged: (value) => setState(() => _isDefault = value),
+          ),
           AppField(
             controller: _contactName,
             label: 'branch.contact_name'.tr(),
@@ -205,14 +232,13 @@ class _BranchFormState extends State<_BranchForm> {
             icon: Icons.phone_outlined,
             textDirection: TextDirection.ltr,
             textInputAction: TextInputAction.done,
+            hint: SaudiPhone.hint,
+            inputFormatters: SaudiPhone.formatters,
             serverError: submit.fieldError('contact_phone'),
           ),
           const SizedBox(height: AppTokens.space2),
-          SubmitButton(
-            busy: submit.isSubmitting,
-            label: 'common.save'.tr(),
-            onPressed: _save,
-          ),
+          FormMessage(message: submit.message),
+          SubmitButton(busy: submit.isSubmitting, label: 'common.save'.tr(), onPressed: _save),
         ],
       ),
     );

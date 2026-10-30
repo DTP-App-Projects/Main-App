@@ -1,4 +1,6 @@
 import '../../../core/network/coerce.dart';
+import '../compliance/trade_compliance.dart';
+import 'live_tracking.dart';
 import 'supplier_summary.dart';
 
 /// The supplier's shipment. The trader reads it, tracks it, and receives
@@ -47,6 +49,15 @@ class DeliveryNote {
   final List<DeliveryLine> lines;
   final int goodsReceiptsCount;
 
+  /// The handoff code the driver must scan or type to deliver. Only present
+  /// on the tracking snapshot, and only while the driver is at the door with
+  /// the code still pending; `null` otherwise.
+  final ReceiverOtp? receiverOtp;
+
+  /// Tracking snapshot only: the Firebase grant for following the driver
+  /// live. `null` (also for `enabled: false`) means poll.
+  final LiveSession? live;
+
   const DeliveryNote({
     required this.id,
     required this.purchaseOrderId,
@@ -78,6 +89,8 @@ class DeliveryNote {
     required this.sealsMatch,
     required this.lines,
     required this.goodsReceiptsCount,
+    this.receiverOtp,
+    this.live,
   });
 
   factory DeliveryNote.fromJson(Map<String, dynamic> j) => DeliveryNote(
@@ -115,6 +128,8 @@ class DeliveryNote {
         sealsMatch: j['seals_match'] == null ? true : asBool(j['seals_match']),
         lines: asList(j['lines'], DeliveryLine.fromJson),
         goodsReceiptsCount: asInt(j['goods_receipts_count']),
+        receiverOtp: ReceiverOtp.tryParse(j['receiver_otp']),
+        live: LiveSession.tryParse(j['live']),
       );
 
   bool get isCanceled => status == 'canceled';
@@ -128,6 +143,58 @@ class DeliveryNote {
   bool get canReceive => (isDelivered || status == 'arrived') && !isCanceled;
 
   bool get sealsTampered => pickupSealNumbers.isNotEmpty && !sealsMatch;
+}
+
+/// The 6-digit code the trader shows the driver at the door.
+///
+/// `code` arrives as a JSON number, so a leading zero is lost on the wire and
+/// restored here.
+class ReceiverOtp {
+  final String code;
+  final DateTime? expiresAt;
+  final int? attemptsRemaining;
+
+  /// The exact string to encode in the QR, e.g. `TJD1:5821:482913`.
+  final String qrPayload;
+
+  const ReceiverOtp({
+    required this.code,
+    required this.expiresAt,
+    required this.attemptsRemaining,
+    required this.qrPayload,
+  });
+
+  static ReceiverOtp? tryParse(dynamic v) {
+    if (v is! Map) return null;
+    final j = v.cast<String, dynamic>();
+    final code = normalizeCode(j['code']);
+    if (code.isEmpty) return null;
+    return ReceiverOtp(
+      code: code,
+      expiresAt: asDate(j['expires_at']),
+      attemptsRemaining: asIntOrNull(j['attempts_remaining']),
+      qrPayload: asStr(j['qr_payload']),
+    );
+  }
+
+  /// `482913`, `"482913"` and `"082913"` all come back as six digits.
+  static String normalizeCode(dynamic v) {
+    final raw = asStr(v).trim();
+    return raw.isEmpty ? '' : raw.padLeft(6, '0');
+  }
+
+  /// The QR text: the server's payload when given, otherwise rebuilt from the
+  /// route stop. `null` means only the digits can be shown.
+  String? qrTextFor(int? routeStopId) {
+    if (qrPayload.isNotEmpty) return qrPayload;
+    if (routeStopId == null || routeStopId <= 0) return null;
+    return 'TJD1:$routeStopId:$code';
+  }
+
+  bool get isExpired {
+    final at = expiresAt;
+    return at != null && at.isBefore(DateTime.now());
+  }
 }
 
 class DeliveryLine {
@@ -304,7 +371,12 @@ class GoodsReceipt {
   final String disputeReason;
   final List<GoodsReceiptLine> lines;
 
+  /// POD method, confirmation state, shortage/defect split (compliance
+  /// release).
+  final ReceiptCompliance compliance;
+
   const GoodsReceipt({
+    this.compliance = ReceiptCompliance.empty,
     required this.id,
     required this.purchaseOrderId,
     required this.deliveryNoteId,
@@ -334,6 +406,7 @@ class GoodsReceipt {
         disputedAt: asDate(j['disputed_at']),
         disputeReason: unwrap(j['dispute_reason']),
         lines: asList(j['lines'], GoodsReceiptLine.fromJson),
+        compliance: ReceiptCompliance.fromJson(j),
       );
 
   bool get isDisputed => disputedAt != null;
@@ -367,4 +440,58 @@ class GoodsReceiptLine {
         rejectedQty: asNum(j['rejected_qty']),
         rejectionReason: unwrap(j['rejection_reason']),
       );
+}
+
+/// The trader's window to correct received quantities after a handoff
+/// (`GET /delivery_notes/{id}/edit_window`). Read as sent, nested under
+/// `edit_window` or flat; [endsAt] drives the countdown.
+class EditWindow {
+  final bool isOpen;
+  final DateTime? endsAt;
+
+  /// The server's own count, used when it sends no end time.
+  final int? remainingSeconds;
+
+  const EditWindow({required this.isOpen, required this.endsAt, this.remainingSeconds});
+
+  static const closed = EditWindow(isOpen: false, endsAt: null);
+
+  factory EditWindow.fromJson(Map<String, dynamic> root) {
+    final j = root['edit_window'] is Map
+        ? asMap(root['edit_window'])
+        : (root['window'] is Map ? asMap(root['window']) : root);
+    final status = asStr(j['status']);
+    final remaining = asIntOrNull(j['remaining_seconds'] ?? j['seconds_remaining']);
+    var endsAt = asDate(j['ends_at'] ?? j['closes_at'] ?? j['expires_at'] ?? j['open_until']);
+    if (endsAt == null && remaining != null && remaining > 0) {
+      endsAt = DateTime.now().add(Duration(seconds: remaining));
+    }
+    final open = j.containsKey('is_open')
+        ? asBool(j['is_open'])
+        : (j.containsKey('open') ? asBool(j['open']) : status == 'open');
+    return EditWindow(isOpen: open, endsAt: endsAt, remainingSeconds: remaining);
+  }
+
+  /// Open, and not past its end on this device's clock.
+  bool isOpenAt(DateTime now) {
+    if (!isOpen) return false;
+    final end = endsAt;
+    return end == null || end.isAfter(now);
+  }
+}
+
+/// One correction inside the edit window, keyed by the **goods receipt
+/// line** id.
+class ReceiptAdjustment {
+  final int lineId;
+  final double? receivedQty;
+  final double? rejectedQty;
+
+  const ReceiptAdjustment({required this.lineId, this.receivedQty, this.rejectedQty});
+
+  Map<String, dynamic> toJson() => {
+        'line_id': lineId,
+        'received_qty': ?receivedQty,
+        'rejected_qty': ?rejectedQty,
+      };
 }

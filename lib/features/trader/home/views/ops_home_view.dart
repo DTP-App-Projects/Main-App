@@ -53,7 +53,12 @@ class OpsHomeView extends StatelessWidget {
     final state = cubit.state;
 
     if (state.loading && state.panel == null) {
-      return const Column(children: [_Greeting(), Expanded(child: _HomeSkeleton())]);
+      return const Column(
+        children: [
+          _Greeting(),
+          Expanded(child: _HomeSkeleton()),
+        ],
+      );
     }
     if (state.panel == null) {
       return Column(
@@ -75,7 +80,8 @@ class OpsHomeView extends StatelessWidget {
         .where((action) => actionHandlers.containsKey(action.key))
         .toList();
     final attention = panel.attention.where((item) => item.title(locale).isNotEmpty).toList();
-    final nothing = panel.kpis.isEmpty &&
+    final nothing =
+        panel.kpis.isEmpty &&
         visibleActions.isEmpty &&
         attention.isEmpty &&
         panel.documentGroups.isEmpty;
@@ -121,9 +127,7 @@ class OpsHomeView extends StatelessWidget {
                   AppSectionLabel('home.overview'.tr()),
                   _ResponsiveGrid(
                     minTileWidth: 150,
-                    children: [
-                      for (final kpi in panel.kpis) _KpiTile(kpi: kpi, locale: locale),
-                    ],
+                    children: [for (final kpi in panel.kpis) _KpiTile(kpi: kpi, locale: locale)],
                   ),
                 ],
 
@@ -159,7 +163,7 @@ class OpsHomeView extends StatelessWidget {
                       for (final group in panel.documentGroups)
                         AppMenuRow(
                           icon: _groupIcon(group.key),
-                          title: group.label(locale),
+                          title: _groupName(group, locale),
                           trailing: group.count == 0 ? null : AppCountBadge(group.count),
                           onTap: () => _openGroup(context, group),
                         ),
@@ -198,6 +202,18 @@ class OpsHomeView extends StatelessWidget {
     if (shell != null) shell.select(ShellTab.trade);
   }
 
+  /// The server's label when it sent one; otherwise the group key named in
+  /// the app's language (`purchase_orders` → «أوامر الشراء»).
+  static String _groupName(DocumentGroup group, String locale) {
+    final server = group.label(locale);
+    if (server.isNotEmpty) return server;
+    final key = 'home.group_${group.key}';
+    final translated = key.tr();
+    if (translated != key) return translated;
+    final words = group.key.replaceAll('_', ' ');
+    return words.isEmpty ? '—' : words[0].toUpperCase() + words.substring(1);
+  }
+
   static IconData _groupIcon(String key) {
     final k = key.toLowerCase();
     if (k.contains('order')) return Icons.receipt_long_outlined;
@@ -211,6 +227,8 @@ class OpsHomeView extends StatelessWidget {
     if (k.contains('collection') || k.contains('payment')) return Icons.payments_outlined;
     if (k.contains('return')) return Icons.assignment_return_outlined;
     if (k.contains('contract')) return Icons.handshake_outlined;
+    // Not `receipt_long`: on this grid that is already purchase orders.
+    if (k.contains('settlement')) return Icons.account_balance_outlined;
     return Icons.folder_outlined;
   }
 }
@@ -247,7 +265,10 @@ class _Greeting extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(greeting, style: theme.textTheme.bodyLarge?.copyWith(color: t.textSecondary)),
+                  Text(
+                    greeting,
+                    style: theme.textTheme.bodyLarge?.copyWith(color: t.textSecondary),
+                  ),
                   const SizedBox(height: 2),
                   Text(
                     firstName.isEmpty ? 'app.name'.tr() : firstName,
@@ -256,10 +277,7 @@ class _Greeting extends StatelessWidget {
                     style: theme.textTheme.displaySmall,
                   ),
                   const SizedBox(height: AppTokens.space1),
-                  Text(
-                    DateFormat.yMMMMEEEEd(locale).format(now),
-                    style: theme.textTheme.bodySmall,
-                  ),
+                  Text(DateFormat.yMMMMEEEEd(locale).format(now), style: theme.textTheme.bodySmall),
                   const SizedBox(height: AppTokens.space3),
                   Wrap(
                     spacing: AppTokens.space2,
@@ -280,8 +298,10 @@ class _Greeting extends StatelessWidget {
                   tooltip: 'nav.notifications'.tr(),
                   dot: unread > 0,
                   onPressed: () {
+                    // The trader's bar has the shop in that slot, so the
+                    // bell opens the list as its own screen there.
                     final shell = ShellScope.maybeOf(context);
-                    if (shell != null) {
+                    if (shell != null && shell.has(ShellTab.notifications)) {
                       shell.select(ShellTab.notifications);
                     } else {
                       context.push(AppRoutes.notifications);
@@ -306,33 +326,33 @@ class _ResponsiveGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-        builder: (context, constraints) {
-          const gap = AppTokens.space3;
-          final columns = ((constraints.maxWidth + gap) / (minTileWidth + gap)).floor().clamp(2, 4);
-          final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
-          return Wrap(
-            spacing: gap,
-            runSpacing: gap,
-            children: [for (final child in children) SizedBox(width: width, child: child)],
-          );
-        },
+    builder: (context, constraints) {
+      const gap = AppTokens.space3;
+      final columns = ((constraints.maxWidth + gap) / (minTileWidth + gap)).floor().clamp(2, 4);
+      final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
+      return Wrap(
+        spacing: gap,
+        runSpacing: gap,
+        children: [for (final child in children) SizedBox(width: width, child: child)],
       );
+    },
+  );
 }
 
 /// Severity words first; anything else is read as a document status
 /// (`overdue`, `arrived`…) through the shared status tones.
 AppTone _toneFor(String severity) => switch (severity) {
-      'danger' || 'critical' || 'high' => AppTone.danger,
-      'warn' || 'warning' || 'medium' => AppTone.warning,
-      'info' || 'low' => AppTone.info,
-      'ok' || 'good' || '' => AppTone.brand,
-      _ => switch (toneForStatus(severity)) {
-          StatusTone.danger => AppTone.danger,
-          StatusTone.warn => AppTone.warning,
-          StatusTone.inFlight => AppTone.info,
-          _ => AppTone.brand,
-        },
-    };
+  'danger' || 'critical' || 'high' => AppTone.danger,
+  'warn' || 'warning' || 'medium' => AppTone.warning,
+  'info' || 'low' => AppTone.info,
+  'ok' || 'good' || '' => AppTone.brand,
+  _ => switch (toneForStatus(severity)) {
+    StatusTone.danger => AppTone.danger,
+    StatusTone.warn => AppTone.warning,
+    StatusTone.inFlight => AppTone.info,
+    _ => AppTone.brand,
+  },
+};
 
 class _KpiTile extends StatelessWidget {
   final KpiTile kpi;
@@ -364,7 +384,8 @@ class _ActionTile extends StatelessWidget {
     final t = context.tokens;
     // The server already filtered by permission; this second check only
     // greys out a stale response, and an owner passes both.
-    final allowed = permissions == null ||
+    final allowed =
+        permissions == null ||
         action.allPermissions.isEmpty ||
         permissions!.canAny(action.allPermissions);
 
@@ -377,7 +398,11 @@ class _ActionTile extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AppIconCircle(_iconFor(action.key), size: 40, tone: allowed ? AppTone.brand : AppTone.neutral),
+            AppIconCircle(
+              _iconFor(action.key),
+              size: 40,
+              tone: allowed ? AppTone.brand : AppTone.neutral,
+            ),
             const SizedBox(height: AppTokens.space3),
             Text(
               action.label(locale),
@@ -392,20 +417,20 @@ class _ActionTile extends StatelessWidget {
   }
 
   static IconData _iconFor(String key) => switch (key) {
-        'create_purchase_draft' => Icons.add_shopping_cart_rounded,
-        'confirm_goods_receipt' => Icons.inventory_2_outlined,
-        'claim_payment' => Icons.payments_outlined,
-        'create_delivery_note' => Icons.local_shipping_outlined,
-        'dispatch_delivery' => Icons.send_rounded,
-        'track_outbound_shipments' => Icons.map_outlined,
-        'issue_invoice' => Icons.request_quote_outlined,
-        'record_collection' => Icons.account_balance_wallet_outlined,
-        'confirm_collection' => Icons.verified_outlined,
-        'approve_purchase_order' => Icons.fact_check_outlined,
-        'review_contract' || 'create_contract' => Icons.description_outlined,
-        'manage_shelves' => Icons.shelves,
-        _ => Icons.bolt_rounded,
-      };
+    'create_purchase_draft' => Icons.add_shopping_cart_rounded,
+    'confirm_goods_receipt' => Icons.inventory_2_outlined,
+    'claim_payment' => Icons.payments_outlined,
+    'create_delivery_note' => Icons.local_shipping_outlined,
+    'dispatch_delivery' => Icons.send_rounded,
+    'track_outbound_shipments' => Icons.map_outlined,
+    'issue_invoice' => Icons.request_quote_outlined,
+    'record_collection' => Icons.account_balance_wallet_outlined,
+    'confirm_collection' => Icons.verified_outlined,
+    'approve_purchase_order' => Icons.fact_check_outlined,
+    'review_contract' || 'create_contract' => Icons.description_outlined,
+    'manage_shelves' => Icons.shelves,
+    _ => Icons.bolt_rounded,
+  };
 }
 
 /// One attention item, as a Driver inner row: tone disc, title, body, and
@@ -462,37 +487,37 @@ class _HomeSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SkeletonShimmer(
-        child: ListView(
-          physics: const NeverScrollableScrollPhysics(),
-          padding: const EdgeInsetsDirectional.fromSTEB(
-            AppTokens.gutter,
-            AppTokens.space2,
-            AppTokens.gutter,
-            AppTokens.space4,
-          ),
-          children: const [
-            Skeleton.box(height: 140),
-            SizedBox(height: AppTokens.sectionGap),
-            Skeleton.line(widthFactor: 0.3, height: 13),
-            SizedBox(height: AppTokens.space3),
-            Row(
-              children: [
-                Expanded(child: Skeleton.box(height: 96)),
-                SizedBox(width: AppTokens.space3),
-                Expanded(child: Skeleton.box(height: 96)),
-              ],
-            ),
-            SizedBox(height: AppTokens.space3),
-            Row(
-              children: [
-                Expanded(child: Skeleton.box(height: 96)),
-                SizedBox(width: AppTokens.space3),
-                Expanded(child: Skeleton.box(height: 96)),
-              ],
-            ),
-            SizedBox(height: AppTokens.sectionGap),
-            Skeleton.box(height: 180),
+    child: ListView(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsetsDirectional.fromSTEB(
+        AppTokens.gutter,
+        AppTokens.space2,
+        AppTokens.gutter,
+        AppTokens.space4,
+      ),
+      children: const [
+        Skeleton.box(height: 140),
+        SizedBox(height: AppTokens.sectionGap),
+        Skeleton.line(widthFactor: 0.3, height: 13),
+        SizedBox(height: AppTokens.space3),
+        Row(
+          children: [
+            Expanded(child: Skeleton.box(height: 96)),
+            SizedBox(width: AppTokens.space3),
+            Expanded(child: Skeleton.box(height: 96)),
           ],
         ),
-      );
+        SizedBox(height: AppTokens.space3),
+        Row(
+          children: [
+            Expanded(child: Skeleton.box(height: 96)),
+            SizedBox(width: AppTokens.space3),
+            Expanded(child: Skeleton.box(height: 96)),
+          ],
+        ),
+        SizedBox(height: AppTokens.sectionGap),
+        Skeleton.box(height: 180),
+      ],
+    ),
+  );
 }

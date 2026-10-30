@@ -9,6 +9,7 @@ import '../../../../core/utils/roots/app_router.dart';
 import '../../../../core/utils/services/remote_services/service_locator.dart';
 import '../../../../data/models/trade/invoice.dart';
 import '../../../../data/repositories/receivables_repository.dart';
+import '../../../shared/compliance/views/payment_notice_widgets.dart';
 import '../view_models/payables_cubits.dart';
 
 const _invoiceStatuses = ['issued', 'partially_paid', 'paid', 'overdue', 'canceled'];
@@ -79,21 +80,56 @@ class _InvoicesBody extends StatelessWidget {
 
 /// One invoice: what is owed, when each instalment falls due, and the claim
 /// button. Totals are displayed as the server sent them — never re-derived.
+/// A return goes through a return note (guide Part 14.1): the other side
+/// accepts it with a verification code and a credit note follows. The old
+/// `post_invoice_returns` form was approved by the supplier with neither.
+void _openReturnNote(BuildContext context, Invoice invoice) {
+  final purchaseOrderId = invoice.purchaseOrderId;
+  if (purchaseOrderId == null) return;
+  context.push(AppRoutes.returnNoteNewFor(purchaseOrderId, invoiceId: invoice.id));
+}
+
 class InvoiceDetailView extends StatelessWidget {
   final int invoiceId;
 
-  const InvoiceDetailView({super.key, required this.invoiceId});
+  /// The notice a `payment_notice.*` push is about — scrolled to and marked.
+  final int? highlightNoticeId;
+
+  const InvoiceDetailView({super.key, required this.invoiceId, this.highlightNoticeId});
 
   @override
   Widget build(BuildContext context) => BlocProvider(
         create: (_) =>
             InvoiceDetailCubit(getIt<ReceivablesRepository>(), invoiceId)..load(),
-        child: const _InvoiceDetailBody(),
+        child: _InvoiceDetailBody(highlightNoticeId: highlightNoticeId),
       );
 }
 
-class _InvoiceDetailBody extends StatelessWidget {
-  const _InvoiceDetailBody();
+class _InvoiceDetailBody extends StatefulWidget {
+  final int? highlightNoticeId;
+
+  const _InvoiceDetailBody({this.highlightNoticeId});
+
+  @override
+  State<_InvoiceDetailBody> createState() => _InvoiceDetailBodyState();
+}
+
+class _InvoiceDetailBodyState extends State<_InvoiceDetailBody> {
+  final _highlightKey = GlobalKey();
+  bool _scrolled = false;
+
+  /// Once the highlighted notice is on the list, bring it into view — once.
+  void _scrollToNotice(InvoiceDetailState state) {
+    final id = widget.highlightNoticeId;
+    if (_scrolled || id == null || !state.notices.any((n) => n.id == id)) return;
+    _scrolled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _highlightKey.currentContext;
+      if (target != null) {
+        Scrollable.ensureVisible(target, duration: const Duration(milliseconds: 300), alignment: 0.1);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -102,6 +138,7 @@ class _InvoiceDetailBody extends StatelessWidget {
     final invoice = state.invoice;
     final theme = Theme.of(context);
     final t = context.tokens;
+    _scrollToNotice(state);
 
     return Scaffold(
       // The number leads the header card; the bar names the document type.
@@ -109,11 +146,15 @@ class _InvoiceDetailBody extends StatelessWidget {
       bottomNavigationBar: invoice == null
           ? null
           : AppBottomBar(
+              // The last action's result, right above the buttons.
+              leading: (state.action.message ?? '').isEmpty
+                  ? null
+                  : FormMessage(message: state.action.message, success: state.action.isSuccess),
               child: invoice.isPaid
                   ? AppButton.outline(
                       label: 'returns.submit'.tr(),
                       icon: Icons.assignment_return_outlined,
-                      onPressed: () => context.push(AppRoutes.returnFor(invoice.id)),
+                      onPressed: () => _openReturnNote(context, invoice),
                     )
                   : Row(
                       children: [
@@ -121,7 +162,7 @@ class _InvoiceDetailBody extends StatelessWidget {
                           child: AppButton.outline(
                             label: 'returns.submit'.tr(),
                             icon: Icons.assignment_return_outlined,
-                            onPressed: () => context.push(AppRoutes.returnFor(invoice.id)),
+                            onPressed: () => _openReturnNote(context, invoice),
                           ),
                         ),
                         const SizedBox(width: AppTokens.space3),
@@ -152,10 +193,17 @@ class _InvoiceDetailBody extends StatelessWidget {
             child: ListView(
               padding: AppTokens.pagePadding,
               children: [
-                FormMessage(
-                  message: state.action.message,
-                  success: state.action.isSuccess,
-                ),
+                // ---- the tax invoice: ZATCA QR, PDF, late payment, Nafith,
+                //      dispute pack (compliance release) ---------------------
+                AppMenuGroup(children: [
+                  AppMenuRow(
+                    icon: Icons.qr_code_2_rounded,
+                    title: 'tax.open'.tr(),
+                    subtitle: invoice.compliance.documentTitle.isEmpty ? null : invoice.compliance.documentTitle,
+                    onTap: () => context.push(AppRoutes.invoiceComplianceFor(invoice.id)),
+                  ),
+                ]),
+                const SizedBox(height: AppTokens.space4),
 
                 // ---- header, with what is still owed as the hero -----------
                 AppCard(
@@ -255,6 +303,24 @@ class _InvoiceDetailBody extends StatelessWidget {
                       ],
                     ),
                   ),
+                ],
+
+                // ---- payment notices: waiting, confirmed, rejected ---------
+                if (state.notices.isNotEmpty) ...[
+                  AppSectionLabel(
+                    'payment_notice.title'.tr(),
+                    trailing: AppCountBadge(state.notices.length),
+                  ),
+                  for (final notice in state.notices)
+                    Padding(
+                      key: notice.id == widget.highlightNoticeId ? _highlightKey : null,
+                      padding: const EdgeInsetsDirectional.only(bottom: AppTokens.space3),
+                      child: PaymentNoticeCard(
+                        notice: notice,
+                        highlighted: notice.id == widget.highlightNoticeId,
+                        onReviewed: cubit.load,
+                      ),
+                    ),
                 ],
 
                 // ---- claims already sent ------------------------------------
@@ -438,8 +504,9 @@ class _ClaimPaymentSheetState extends State<ClaimPaymentSheet> {
   final _reference = TextEditingController();
   final _note = TextEditingController();
 
-  String? _method = ReceivablesRepository.traderPaymentMethods.first;
+  String? _method = ReceivablesRepository.noticePaymentMethods.first;
   String? _proofPath;
+  DateTime _paidAt = DateTime.now();
 
   @override
   void dispose() {
@@ -454,13 +521,16 @@ class _ClaimPaymentSheetState extends State<ClaimPaymentSheet> {
     final amount = double.tryParse(_amount.text.trim()) ?? 0;
     if (amount < 0.01) return;
 
-    final ok = await context.read<InvoiceDetailCubit>().claim(
+    // A payment notice, as the website sends it — the supplier confirms
+    // or rejects it, and confirming is what moves the balance.
+    final ok = await context.read<InvoiceDetailCubit>().sendNotice(
           amount: amount,
           dueScheduleId: widget.schedule?.id,
-          paymentMethod: _method,
+          paymentMethod: _method ?? ReceivablesRepository.noticePaymentMethods.first,
           referenceNo: _reference.text.trim().isEmpty ? null : _reference.text.trim(),
           proofFile: _proofPath,
           note: _note.text.trim().isEmpty ? null : _note.text.trim(),
+          paidAt: _paidAt,
         );
     if (ok && mounted) Navigator.of(context).pop();
   }
@@ -476,7 +546,6 @@ class _ClaimPaymentSheetState extends State<ClaimPaymentSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          FormMessage(message: state.action.message),
           if (schedule != null) ...[
             Align(
               alignment: AlignmentDirectional.centerStart,
@@ -505,12 +574,25 @@ class _ClaimPaymentSheetState extends State<ClaimPaymentSheet> {
           CodePicker(
             label: 'invoice.payment_method'.tr(),
             value: _method,
-            // A trader may only claim with these three; the supplier's own
-            // recording allows more.
-            codes: ReceivablesRepository.traderPaymentMethods,
+            // The methods `POST /payment_notices` accepts.
+            codes: ReceivablesRepository.noticePaymentMethods,
             labelOf: (code) => 'invoice.method_$code'.tr(),
             error: state.action.fieldError('payment_method'),
             onChanged: (value) => setState(() => _method = value),
+          ),
+          AppDateField(
+            label: 'invoice.paid_at'.tr(),
+            value: _paidAt,
+            error: state.action.fieldError('paid_at'),
+            onTap: () async {
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: _paidAt,
+                firstDate: DateTime(2020),
+                lastDate: DateTime.now(),
+              );
+              if (picked != null) setState(() => _paidAt = picked);
+            },
           ),
           AppField(
             controller: _reference,
@@ -521,7 +603,7 @@ class _ClaimPaymentSheetState extends State<ClaimPaymentSheet> {
           ),
           ProofFileField(
             label: 'invoice.proof'.tr(),
-            module: 'collections',
+            module: 'payment_notices',
             fieldKey: 'proof_file',
             onUploaded: (path) => _proofPath = path,
             error: state.action.fieldError('proof_file'),
@@ -534,6 +616,7 @@ class _ClaimPaymentSheetState extends State<ClaimPaymentSheet> {
             serverError: state.action.fieldError('note'),
           ),
           const SizedBox(height: AppTokens.space2),
+          FormMessage(message: state.action.message),
           SubmitButton(
             busy: state.action.isSubmitting,
             label: 'invoice.send_claim'.tr(),

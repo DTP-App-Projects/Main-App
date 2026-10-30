@@ -42,6 +42,7 @@ class SplashView extends StatelessWidget {
             // not, so they get different screens and different copy — both on
             // the brand canvas rather than a bare white page.
             return Stack(
+              fit: StackFit.expand,
               children: [
                 const Positioned.fill(child: BrandBackground()),
                 SafeArea(

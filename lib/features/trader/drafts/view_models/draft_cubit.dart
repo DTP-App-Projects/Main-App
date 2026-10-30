@@ -31,7 +31,22 @@ class DraftState {
 
   final List<PaymentTerm> paymentTerms;
 
+  /// The `credit_review` of the submit — a `failed` / `manual_review` one
+  /// means the order exists but is on credit hold.
+  final CreditReview? creditReview;
+
+  /// Every `errors[]` entry of a refused submit, each shown, and the line
+  /// with its `sku_id` highlighted.
+  final List<SubmitRuleError> ruleErrors;
+
+  /// The stable code of the last refused submit, for the guided refusals
+  /// (framework agreement not signed yet).
+  final String actionCode;
+
   const DraftState({
+    this.creditReview,
+    this.ruleErrors = const [],
+    this.actionCode = '',
     this.loading = true,
     this.draft,
     this.errorMessage,
@@ -53,20 +68,25 @@ class DraftState {
     bool? addingLine,
     PurchaseOrder? submitted,
     List<PaymentTerm>? paymentTerms,
+    CreditReview? creditReview,
+    List<SubmitRuleError>? ruleErrors,
+    String? actionCode,
     bool clearError = false,
     bool clearLineError = false,
-  }) =>
-      DraftState(
-        loading: loading ?? this.loading,
-        draft: draft ?? this.draft,
-        errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
-        offline: offline ?? this.offline,
-        action: action ?? this.action,
-        lineError: clearLineError ? null : (lineError ?? this.lineError),
-        addingLine: addingLine ?? this.addingLine,
-        submitted: submitted ?? this.submitted,
-        paymentTerms: paymentTerms ?? this.paymentTerms,
-      );
+  }) => DraftState(
+    creditReview: creditReview ?? this.creditReview,
+    ruleErrors: ruleErrors ?? this.ruleErrors,
+    actionCode: actionCode ?? this.actionCode,
+    loading: loading ?? this.loading,
+    draft: draft ?? this.draft,
+    errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+    offline: offline ?? this.offline,
+    action: action ?? this.action,
+    lineError: clearLineError ? null : (lineError ?? this.lineError),
+    addingLine: addingLine ?? this.addingLine,
+    submitted: submitted ?? this.submitted,
+    paymentTerms: paymentTerms ?? this.paymentTerms,
+  );
 }
 
 /// Draft → purchase order, the trader's core flow.
@@ -91,8 +111,8 @@ class DraftCubit extends Cubit<DraftState> {
     required this.supplierOrganizationId,
     this.relationshipId,
     int? draftId,
-  })  : _draftId = draftId,
-        super(const DraftState());
+  }) : _draftId = draftId,
+       super(const DraftState());
 
   int? get draftId => _draftId;
 
@@ -116,11 +136,13 @@ class DraftCubit extends Cubit<DraftState> {
       await _loadPaymentTerms();
       return;
     }
-    emit(state.copyWith(
-      loading: false,
-      offline: result.isOffline,
-      errorMessage: result.failureMessage,
-    ));
+    emit(
+      state.copyWith(
+        loading: false,
+        offline: result.isOffline,
+        errorMessage: result.failureMessage,
+      ),
+    );
   }
 
   Future<void> _loadPaymentTerms() async {
@@ -128,23 +150,24 @@ class DraftCubit extends Cubit<DraftState> {
     if (result case Ok(:final data)) emit(state.copyWith(paymentTerms: data));
   }
 
-  /// Header fields: payment term, delivery branch, notes. An upsert again.
-  Future<void> updateHeader({
-    int? paymentTermId,
-    int? deliveryBranchId,
-    String? notes,
-  }) async {
+  /// Header fields: payment term, delivery branch, notes. An upsert again —
+  /// so every field the draft already has is sent back with the change.
+  /// Sending only the edited one could clear the rest, the contract the
+  /// guided order chose included.
+  Future<void> updateHeader({int? paymentTermId, int? deliveryBranchId, String? notes}) async {
     final id = _draftId;
     if (id == null || state.action.isSubmitting) return;
     emit(state.copyWith(action: const SubmitState(status: FormStatus.submitting)));
 
+    final current = state.draft;
     final result = await _orders.saveDraft(
       draftId: id,
       supplierOrganizationId: supplierOrganizationId,
       relationshipId: relationshipId,
-      paymentTermId: paymentTermId,
-      deliveryBranchId: deliveryBranchId,
-      notes: notes,
+      paymentTermId: paymentTermId ?? current?.paymentTermId,
+      deliveryBranchId: deliveryBranchId ?? current?.deliveryBranchId,
+      contractId: current?.contractId,
+      notes: notes ?? (current?.notes.isEmpty ?? true ? null : current!.notes),
     );
     if (result case Ok(:final data)) {
       emit(state.copyWith(draft: data, action: const SubmitState()));
@@ -180,10 +203,12 @@ class DraftCubit extends Cubit<DraftState> {
       relationshipId: relationshipId,
     );
     if (pricing case Ok(:final data) when !data.canOrder) {
-      emit(state.copyWith(
-        addingLine: false,
-        lineError: ErrorMessages.forCode('pricing_not_found_for_sku'),
-      ));
+      emit(
+        state.copyWith(
+          addingLine: false,
+          lineError: ErrorMessages.forCode('pricing_not_found_for_sku'),
+        ),
+      );
       return 'pricing_not_found_for_sku';
     }
 
@@ -195,10 +220,7 @@ class DraftCubit extends Cubit<DraftState> {
     }
 
     final code = result is Failed<PurchaseDraft> ? result.code : null;
-    emit(state.copyWith(
-      addingLine: false,
-      lineError: result.failureMessage,
-    ));
+    emit(state.copyWith(addingLine: false, lineError: result.failureMessage));
     // The draft may still have changed; re-read rather than guess.
     await _reload();
     return code;
@@ -217,23 +239,69 @@ class DraftCubit extends Cubit<DraftState> {
   }
 
   /// **Not auto-retried.** On any failure the user is shown what happened and
-  /// re-checks the order list themselves.
-  Future<PurchaseOrder?> submit() async {
+  /// re-checks the order list themselves. Notes typed but not yet saved are
+  /// saved first, with the rest of the header.
+  ///
+  /// A delivery branch is required (the server refuses with
+  /// `delivery_branch_required`), so a draft without one is stopped here.
+  Future<PurchaseOrder?> submit({String? notes}) async {
     final id = _draftId;
     if (id == null || state.action.isSubmitting) return null;
-    emit(state.copyWith(action: const SubmitState(status: FormStatus.submitting)));
+    final draft = state.draft;
+    if (draft != null && draft.deliveryBranchId == null) {
+      emit(
+        state.copyWith(
+          actionCode: 'delivery_branch_required',
+          ruleErrors: const [],
+          action: SubmitState(
+            status: FormStatus.failure,
+            message: ErrorMessages.forCode('delivery_branch_required'),
+          ),
+        ),
+      );
+      return null;
+    }
+    if (notes != null && draft != null && notes.trim() != draft.notes) {
+      await updateHeader(notes: notes.trim());
+      if (state.action.status == FormStatus.failure) return null;
+    }
+    emit(
+      state.copyWith(
+        action: const SubmitState(status: FormStatus.submitting),
+        ruleErrors: const [],
+        actionCode: '',
+      ),
+    );
 
     final result = await _orders.submitDraft(id);
     if (result case Ok(:final data)) {
-      emit(state.copyWith(
-        submitted: data,
-        action: const SubmitState(status: FormStatus.success),
-      ));
-      return data;
+      emit(
+        state.copyWith(
+          submitted: data.order,
+          creditReview: data.creditReview,
+          action: const SubmitState(status: FormStatus.success),
+        ),
+      );
+      return data.order;
     }
-    emit(state.copyWith(action: result.failureState));
+    final details = result is Failed<DraftSubmitResult> ? result.details : null;
+    emit(
+      state.copyWith(
+        action: result.failureState,
+        actionCode: result.failureCode,
+        ruleErrors: SubmitRuleError.listFrom(details),
+      ),
+    );
+    // The server may have re-priced or attached a contract; show its draft.
+    await _reload();
     return null;
   }
+
+  /// The submit's rule errors about [skuId]'s line.
+  List<SubmitRuleError> errorsForSku(int skuId) => [
+    for (final e in state.ruleErrors)
+      if (e.skuId == skuId) e,
+  ];
 
   Future<void> _reload() async {
     final id = _draftId;

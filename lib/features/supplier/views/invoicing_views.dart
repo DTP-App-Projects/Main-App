@@ -88,6 +88,8 @@ class _InvoiceCard extends StatelessWidget {
     final cubit = context.read<SupplierInvoicesCubit>();
 
     return AppCard.item(
+      // The supplier's way into the tax invoice, late payment and Nafith.
+      onTap: () => context.push(AppRoutes.invoiceComplianceFor(invoice.id)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -267,7 +269,6 @@ class _DueScheduleFormState extends State<_DueScheduleForm> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        FormMessage(message: _error),
         AppField(
           controller: _amount,
           label: 'invoice.amount'.tr(),
@@ -290,6 +291,7 @@ class _DueScheduleFormState extends State<_DueScheduleForm> {
             if (picked != null) setState(() => _dueDate = picked);
           },
         ),
+        FormMessage(message: _error),
         SubmitButton(busy: _busy, label: 'common.save'.tr(), onPressed: _save),
       ],
     );
@@ -351,10 +353,18 @@ class _IssueInvoiceBodyState extends State<_IssueInvoiceBody> {
                 style: theme.textTheme.bodySmall?.copyWith(color: t.textTertiary),
               )
             : null,
-        child: SubmitButton(
-          busy: state.action.isSubmitting,
-          label: 'invoice.issue'.tr(),
-          onPressed: _order == null ? null : _issue,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The server's answer, right above the button that asked.
+            FormMessage(message: state.action.message),
+            SubmitButton(
+              busy: state.action.isSubmitting,
+              label: 'invoice.issue'.tr(),
+              onPressed: _order == null ? null : _issue,
+            ),
+          ],
         ),
       ),
       body: ListView(
@@ -365,7 +375,6 @@ class _IssueInvoiceBodyState extends State<_IssueInvoiceBody> {
           AppTokens.space8,
         ),
         children: [
-          FormMessage(message: state.action.message),
           AppBanner(message: 'invoice.issue_hint'.tr()),
 
           AppCard(

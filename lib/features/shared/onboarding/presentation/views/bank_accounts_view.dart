@@ -85,6 +85,7 @@ class _BankFormState extends State<_BankForm> {
       TextEditingController(text: widget.account?.currencyCode.isNotEmpty == true
           ? widget.account!.currencyCode
           : 'SAR');
+  late final _rawDetails = TextEditingController();
 
   @override
   void dispose() {
@@ -95,6 +96,7 @@ class _BankFormState extends State<_BankForm> {
       _iban,
       _swift,
       _currency,
+      _rawDetails,
     ]) {
       controller.dispose();
     }
@@ -112,6 +114,7 @@ class _BankFormState extends State<_BankForm> {
           iban: _iban.text,
           swiftCode: _swift.text,
           currencyCode: _currency.text,
+          rawDetails: _rawDetails.text,
         );
     if (saved && mounted) Navigator.of(context).pop();
   }
@@ -125,7 +128,6 @@ class _BankFormState extends State<_BankForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          FormMessage(message: submit.message),
           AppField(
             controller: _bankName,
             label: 'bank.bank_name'.tr(),
@@ -169,10 +171,18 @@ class _BankFormState extends State<_BankForm> {
             label: 'bank.currency'.tr(),
             maxLength: 3,
             textDirection: TextDirection.ltr,
-            textInputAction: TextInputAction.done,
             serverError: submit.fieldError('currency_code'),
           ),
+          AppField(
+            controller: _rawDetails,
+            label: 'bank.raw_details'.tr(),
+            hint: 'common.optional'.tr(),
+            maxLines: 2,
+            textInputAction: TextInputAction.newline,
+            serverError: submit.fieldError('raw_details'),
+          ),
           const SizedBox(height: AppTokens.space2),
+          FormMessage(message: submit.message),
           SubmitButton(
             busy: submit.isSubmitting,
             label: 'common.save'.tr(),

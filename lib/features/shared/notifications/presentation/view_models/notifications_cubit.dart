@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -43,16 +45,15 @@ class NotificationsState {
     int? unreadCount,
     bool? unreadOnly,
     bool clearError = false,
-  }) =>
-      NotificationsState(
-        loading: loading ?? this.loading,
-        loadingMore: loadingMore ?? this.loadingMore,
-        page: page ?? this.page,
-        errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
-        offline: offline ?? this.offline,
-        unreadCount: unreadCount ?? this.unreadCount,
-        unreadOnly: unreadOnly ?? this.unreadOnly,
-      );
+  }) => NotificationsState(
+    loading: loading ?? this.loading,
+    loadingMore: loadingMore ?? this.loadingMore,
+    page: page ?? this.page,
+    errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+    offline: offline ?? this.offline,
+    unreadCount: unreadCount ?? this.unreadCount,
+    unreadOnly: unreadOnly ?? this.unreadOnly,
+  );
 }
 
 /// Lives for the whole session: the shell reads [NotificationsState.unreadCount]
@@ -62,31 +63,40 @@ class NotificationsCubit extends Cubit<NotificationsState> {
 
   NotificationsCubit(this._repo) : super(const NotificationsState());
 
-  Future<void> load({bool unreadOnly = false}) async {
-    emit(state.copyWith(
-      loading: true,
-      clearError: true,
-      offline: false,
-      unreadOnly: unreadOnly,
-    ));
+  /// Coalesces a burst of pushes into one re-read (60 req/min budget).
+  Timer? _pushRefresh;
+
+  /// [quiet] re-reads page one behind the rows already on screen — no
+  /// skeleton, and a failure keeps them.
+  Future<void> load({bool unreadOnly = false, bool quiet = false}) async {
+    final silent = quiet && state.items.isNotEmpty && state.unreadOnly == unreadOnly;
+    if (!silent) {
+      emit(state.copyWith(loading: true, clearError: true, offline: false, unreadOnly: unreadOnly));
+    }
 
     final result = await _repo.list(page: 1, unreadOnly: unreadOnly);
+    if (isClosed) return;
     if (result case Ok(:final data)) {
-      emit(state.copyWith(
-        loading: false,
-        page: data,
-        unreadCount: data.unreadCount ?? state.unreadCount,
-      ));
+      emit(
+        state.copyWith(
+          loading: false,
+          page: data,
+          unreadCount: data.unreadCount ?? state.unreadCount,
+        ),
+      );
       return;
     }
-    emit(state.copyWith(
-      loading: false,
-      offline: result.isOffline,
-      errorMessage: result.failureMessage,
-    ));
+    if (silent) return;
+    emit(
+      state.copyWith(
+        loading: false,
+        offline: result.isOffline,
+        errorMessage: result.failureMessage,
+      ),
+    );
   }
 
-  Future<void> refresh() => load(unreadOnly: state.unreadOnly);
+  Future<void> refresh({bool quiet = false}) => load(unreadOnly: state.unreadOnly, quiet: quiet);
 
   Future<void> toggleUnreadOnly() => load(unreadOnly: !state.unreadOnly);
 
@@ -95,16 +105,15 @@ class NotificationsCubit extends Cubit<NotificationsState> {
     if (state.loading || state.loadingMore || !state.hasMore) return;
     emit(state.copyWith(loadingMore: true));
 
-    final result = await _repo.list(
-      page: state.page.currentPage + 1,
-      unreadOnly: state.unreadOnly,
-    );
+    final result = await _repo.list(page: state.page.currentPage + 1, unreadOnly: state.unreadOnly);
     if (result case Ok(:final data)) {
-      emit(state.copyWith(
-        loadingMore: false,
-        page: state.page.append(data),
-        unreadCount: data.unreadCount ?? state.unreadCount,
-      ));
+      emit(
+        state.copyWith(
+          loadingMore: false,
+          page: state.page.append(data),
+          unreadCount: data.unreadCount ?? state.unreadCount,
+        ),
+      );
       return;
     }
     // A failed page-two keeps page one on screen; the message is enough.
@@ -126,17 +135,19 @@ class NotificationsCubit extends Cubit<NotificationsState> {
   Future<void> markAllRead() async {
     final result = await _repo.markAllRead();
     if (result case Ok(:final data)) {
-      emit(state.copyWith(
-        unreadCount: data,
-        page: Paged(
-          items: state.items.map((n) => n.markedRead()).toList(),
-          currentPage: state.page.currentPage,
-          lastPage: state.page.lastPage,
-          perPage: state.page.perPage,
-          total: state.page.total,
+      emit(
+        state.copyWith(
           unreadCount: data,
+          page: Paged(
+            items: state.items.map((n) => n.markedRead()).toList(),
+            currentPage: state.page.currentPage,
+            lastPage: state.page.lastPage,
+            perPage: state.page.perPage,
+            total: state.page.total,
+            unreadCount: data,
+          ),
         ),
-      ));
+      );
       // The unread-only filter would now show nothing; re-read instead of
       // leaving an empty list that looks like a bug.
       if (state.unreadOnly) await refresh();
@@ -147,24 +158,39 @@ class NotificationsCubit extends Cubit<NotificationsState> {
 
   /// Notifications are scoped to the organization, so a logout or an org
   /// switch must not leave the previous one's badge on screen.
-  void reset() => emit(const NotificationsState());
+  void reset() {
+    _pushRefresh?.cancel();
+    emit(const NotificationsState());
+  }
 
-  /// A push arrived while the app was open: bump the badge without a fetch.
-  void onPushReceived() => emit(state.copyWith(unreadCount: state.unreadCount + 1));
+  /// A push arrived while the app was open: bump the badge at once, then
+  /// re-read the list so the new row is there — the list used to keep its
+  /// old rows until pulled, and only the badge moved.
+  void onPushReceived() {
+    emit(state.copyWith(unreadCount: state.unreadCount + 1));
+    _pushRefresh?.cancel();
+    _pushRefresh = Timer(const Duration(seconds: 1), () => refresh(quiet: true));
+  }
+
+  @override
+  Future<void> close() {
+    _pushRefresh?.cancel();
+    return super.close();
+  }
 
   void _replace(AppNotification updated, {required int unread}) {
-    emit(state.copyWith(
-      unreadCount: unread,
-      page: Paged(
-        items: [
-          for (final item in state.items) item.id == updated.id ? updated : item,
-        ],
-        currentPage: state.page.currentPage,
-        lastPage: state.page.lastPage,
-        perPage: state.page.perPage,
-        total: state.page.total,
+    emit(
+      state.copyWith(
         unreadCount: unread,
+        page: Paged(
+          items: [for (final item in state.items) item.id == updated.id ? updated : item],
+          currentPage: state.page.currentPage,
+          lastPage: state.page.lastPage,
+          perPage: state.page.perPage,
+          total: state.page.total,
+          unreadCount: unread,
+        ),
       ),
-    ));
+    );
   }
 }

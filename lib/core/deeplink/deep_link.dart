@@ -22,7 +22,12 @@ class DeepLink {
   /// on a screen whose actions do not match.
   final Workspace? side;
 
+  /// `payment_notice.*` events point at the invoice (`entity_type=invoice`)
+  /// and name the notice here, so the screen can scroll to it.
+  final int? paymentNoticeId;
+
   const DeepLink({
+    this.paymentNoticeId,
     required this.clickAction,
     this.entityType = '',
     this.entityId,
@@ -41,6 +46,7 @@ class DeepLink {
         code: asStr(data['code']),
         status: asStr(data['status']),
         side: Workspace.tryParse(data['side']),
+        paymentNoticeId: asIntOrNull(data['payment_notice_id']),
       );
 
   bool get isEmpty => clickAction.isEmpty && entityId == null;

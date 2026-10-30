@@ -1,5 +1,6 @@
 import 'package:digital_trade_portal/core/deeplink/deep_link.dart';
 import 'package:digital_trade_portal/core/deeplink/deep_link_router.dart';
+import 'package:digital_trade_portal/core/utils/roots/app_router.dart';
 import 'package:digital_trade_portal/core/workspace/workspace.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -68,9 +69,23 @@ void main() {
 
     test('a known but unbuilt screen has no path yet', () {
       expect(
-        DeepLinkRouter.pathFor(const DeepLink(clickAction: 'purchase_order', entityId: 1)),
+        DeepLinkRouter.pathFor(const DeepLink(clickAction: 'supplier_fleet_contract', entityId: 1)),
         isNull,
       );
+    });
+
+    test('orders, shipments and invoices open the side the push is for', () {
+      String? path(String action, Workspace side) =>
+          DeepLinkRouter.pathFor(DeepLink(clickAction: action, entityId: 7, side: side));
+
+      expect(path('purchase_order', Workspace.supplier), AppRoutes.supplierOrderDetailFor(7));
+      expect(path('purchase_order', Workspace.trader), AppRoutes.orderDetailFor(7));
+      expect(path('delivery_note', Workspace.supplier), AppRoutes.outboundDetailFor(7));
+      expect(path('delivery_note', Workspace.trader), AppRoutes.shipmentDetailFor(7));
+      // «فاتورة جديدة» / «تذكير بالسداد»: the trader's screen has «سداد».
+      expect(path('invoice', Workspace.trader), AppRoutes.invoiceDetailFor(7));
+      expect(path('invoice', Workspace.supplier), AppRoutes.invoiceComplianceFor(7));
+      expect(path('post_invoice_return', Workspace.trader), AppRoutes.returnNotes);
     });
   });
 

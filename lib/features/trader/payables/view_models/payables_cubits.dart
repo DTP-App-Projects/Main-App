@@ -8,6 +8,7 @@ import '../../../../core/ui/form_status.dart';
 import '../../../../core/ui/paged_cubit.dart';
 import '../../../../core/workspace/workspace.dart';
 import '../../../../data/models/trade/invoice.dart';
+import '../../../../data/models/trade/payment_notice.dart';
 import '../../../../data/repositories/receivables_repository.dart';
 
 /// Payables: invoices the trader owes. `?role=trader` is always sent.
@@ -41,9 +42,14 @@ class InvoiceDetailState {
   /// payment is waiting to be confirmed rather than claiming it twice.
   final List<CollectionReceipt> claims;
 
+  /// «إشعارات السداد» on this invoice: each pending (waiting for the
+  /// supplier), confirmed or rejected.
+  final List<PaymentNotice> notices;
+
   final SubmitState action;
 
   const InvoiceDetailState({
+    this.notices = const [],
     this.loading = true,
     this.invoice,
     this.errorMessage,
@@ -58,6 +64,7 @@ class InvoiceDetailState {
     String? errorMessage,
     bool? offline,
     List<CollectionReceipt>? claims,
+    List<PaymentNotice>? notices,
     SubmitState? action,
     bool clearError = false,
   }) =>
@@ -67,6 +74,7 @@ class InvoiceDetailState {
         errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
         offline: offline ?? this.offline,
         claims: claims ?? this.claims,
+        notices: notices ?? this.notices,
         action: action ?? this.action,
       );
 }
@@ -92,8 +100,49 @@ class InvoiceDetailCubit extends Cubit<InvoiceDetailState> {
       return;
     }
 
+    final notices = await _repo.paymentNotices(invoiceId: invoiceId, limit: 50);
+    if (isClosed) return;
+    if (notices case Ok(:final data)) emit(state.copyWith(notices: data.items));
+
+    // Claims from before payment notices — still shown while they settle.
     final claims = await _repo.collections(invoiceId: invoiceId);
+    if (isClosed) return;
     if (claims case Ok(:final data)) emit(state.copyWith(claims: data.items));
+  }
+
+  /// **"I paid"** as the website sends it: a payment notice the supplier
+  /// confirms or rejects. Never auto-retried — a duplicate is a second
+  /// payment to reconcile. On success the invoice and its notices are
+  /// re-read from the server.
+  Future<bool> sendNotice({
+    required double amount,
+    required String paymentMethod,
+    required DateTime paidAt,
+    int? dueScheduleId,
+    String? referenceNo,
+    String? proofFile,
+    String? note,
+  }) async {
+    if (state.action.isSubmitting) return false;
+    emit(state.copyWith(action: const SubmitState(status: FormStatus.submitting)));
+
+    final result = await _repo.sendPaymentNotice(
+      invoiceId: invoiceId,
+      dueScheduleId: dueScheduleId,
+      paymentMethod: paymentMethod,
+      amount: amount,
+      paidAt: paidAt,
+      referenceNo: referenceNo,
+      proofFile: proofFile,
+      note: note,
+    );
+    if (result is Ok<PaymentNotice> || result is NoContent<PaymentNotice>) {
+      emit(state.copyWith(action: const SubmitState(status: FormStatus.success)));
+      await load();
+      return true;
+    }
+    emit(state.copyWith(action: result.failureState));
+    return false;
   }
 
   /// **"I paid — please confirm."** One of invoice or due schedule is

@@ -2,6 +2,7 @@
 import 'package:digital_trade_portal/core/push/push_service.dart';
 import 'package:digital_trade_portal/core/session/session_cubit.dart';
 import 'package:digital_trade_portal/core/session/session_store.dart';
+import 'package:digital_trade_portal/core/workspace/workspace.dart';
 import 'package:digital_trade_portal/core/workspace/workspace_cubit.dart';
 import 'package:digital_trade_portal/core/ui/form_status.dart';
 import 'package:digital_trade_portal/data/repositories/auth_repository.dart';
@@ -166,9 +167,20 @@ void main() {
       // the pop through rather than swallowing it.
       expect(cubit.back(), isFalse);
 
-      cubit.toDetails();
-      expect(cubit.state.step, RegisterStep.details);
+      // The website's four steps, in order, and back retraces them.
+      cubit.next();
+      expect(cubit.state.step, RegisterStep.owner);
+      cubit.next();
+      expect(cubit.state.step, RegisterStep.organization);
+      cubit.next();
+      expect(cubit.state.step, RegisterStep.terms);
+      cubit.next();
+      expect(cubit.state.step, RegisterStep.terms, reason: 'nothing after the last step');
       expect(cubit.back(), isTrue);
+      expect(cubit.state.step, RegisterStep.organization);
+      cubit
+        ..back()
+        ..back();
       expect(cubit.state.step, RegisterStep.mode);
     });
 
@@ -186,12 +198,111 @@ void main() {
         countryId: 1,
         cityId: 2,
         whatsapp: '0501234567',
+        activityType: 'factory',
       );
       final body = adapter.requests.single.data as Map;
 
       // The parameter existed all along; the form never collected it.
       expect(body['whatsapp'], '0501234567');
       expect(body.containsKey('phone'), isFalse, reason: 'empty stays out');
+    });
+
+    test('sign-up carries activity_type and the terms acceptance', () async {
+      final (client, adapter) = clientWith(FakeAdapter.json(const {'user': {}}));
+
+      await AuthRepository(client).registerOwner(
+        businessMode: 'trader',
+        firstName: 'A',
+        lastName: 'B',
+        organizationName: 'C',
+        email: 'a@b.co',
+        password: 'secret123',
+        fcmToken: 'tok',
+        countryId: 1,
+        cityId: 2,
+        activityType: 'marketer',
+        acceptedTermsVersionIds: const [1],
+      );
+      final body = adapter.requests.single.data as Map;
+
+      expect(body['activity_type'], 'marketer');
+      expect(body['accept_terms'], 1);
+      expect(body['accepted_terms_version_ids'], [1]);
+    });
+
+    test("409 terms_version_outdated: show the server's list, re-tick, resend every id", () async {
+      var calls = 0;
+      final (client, adapter) = clientWith(FakeAdapter((options) async {
+        if (options.path.endsWith('/terms')) {
+          return jsonBody(const {'text': '<p>t</p>', 'terms_version_id': 1, 'version': 1.1});
+        }
+        calls++;
+        // Live answer when only the platform terms were sent (2026-10-05).
+        return calls == 1
+            ? jsonBody(const {
+                'msg': 'terms_version_outdated',
+                'message': 'A newer version of this document exists.',
+                'terms_versions': [
+                  {'terms_version_id': 1, 'doc_key': 'platform_terms', 'version': 1.1, 'title': 'الشروط'},
+                  {'terms_version_id': 5, 'doc_key': 'joining_marketer', 'version': 1.3, 'title': 'اتفاقية المسوّق'},
+                ],
+              }, status: 409)
+            : jsonBody(const {'msg': 'validation_error', 'bag': {'email': ['taken']}}, status: 400);
+      }));
+      final store = await freshStore();
+      final bootstrap = BootstrapRepository(client);
+      final push = PushService(AuthRepository(client), bootstrap, store);
+      final cubit = RegisterOwnerCubit(
+        AuthRepository(client),
+        SessionCubit(store, bootstrap, WorkspaceCubit(store, OpsRepository(client)), push),
+        push,
+      );
+      await cubit.loadTerms();
+      cubit
+        ..chooseActivity('marketer')
+        ..setTermsAccepted(true);
+
+      Future<void> submit() => cubit.submit(
+            firstName: 'a', lastName: 'b', organizationName: 'c', email: 'a@b.co',
+            password: 'secret123', countryId: 1, cityId: 2, address: 'x',
+          );
+
+      await submit();
+      expect(cubit.state.termsAccepted, isFalse, reason: 'the user re-ticks for the full set');
+      expect(cubit.state.requiredTerms.map((v) => v.id), [1, 5]);
+      Map<String, dynamic> lastBody() => adapter.requests.where((r) => r.path.contains('register_owner')).last.data as Map<String, dynamic>;
+      expect(lastBody()['accepted_terms_version_ids'], [1]);
+
+      cubit.setTermsAccepted(true);
+      await submit();
+      expect(lastBody()['accepted_terms_version_ids'], [1, 5]);
+      expect(lastBody()['activity_type'], 'marketer');
+      // The 400 names `email`, which lives on the owner step.
+      expect(cubit.state.step, RegisterStep.owner);
+    });
+
+    test('a mode selects its first activity, as on the website', () async {
+      final (client, _) = clientWith(FakeAdapter.json(const []));
+      final store = await freshStore();
+      final bootstrap = BootstrapRepository(client);
+      final push = PushService(AuthRepository(client), bootstrap, store);
+      final cubit = RegisterOwnerCubit(
+        AuthRepository(client),
+        SessionCubit(store, bootstrap, WorkspaceCubit(store, OpsRepository(client)), push),
+        push,
+      );
+      expect(cubit.state.businessMode, 'trader');
+      expect(cubit.state.activityType, 'retailer');
+
+      // A marketer is a trader-mode activity (spec §11).
+      cubit.chooseActivity('marketer');
+      expect(cubit.state.activityType, 'marketer');
+
+      cubit.chooseMode('supplier');
+      expect(cubit.state.activityType, 'factory');
+      expect(ActivityType.forMode('supplier'), ['factory', 'supplier_trader']);
+      cubit.chooseMode('trader');
+      expect(cubit.state.activityType, 'retailer');
     });
   });
 }

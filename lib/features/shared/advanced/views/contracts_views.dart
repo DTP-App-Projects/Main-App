@@ -8,7 +8,11 @@ import '../../../../core/ui/ui.dart';
 import '../../../../core/utils/roots/app_router.dart';
 import '../../../../core/utils/services/remote_services/service_locator.dart';
 import '../../../../core/workspace/workspace_cubit.dart';
+import '../../../../core/error/api_failure_ui.dart';
+import '../../../../core/network/api_result.dart';
 import '../../../../data/models/advanced/contract.dart';
+import '../../../../data/models/lookups/lookup_item.dart';
+import '../../../../data/repositories/lookups_repository.dart';
 import '../../../../data/repositories/contracts_repository.dart';
 import '../view_models/advanced_cubits.dart';
 
@@ -52,6 +56,11 @@ class _ContractsBody extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(title: Text('contract.title'.tr())),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _newContract(context),
+        icon: const Icon(Icons.add_rounded),
+        label: Text('contract.new'.tr()),
+      ),
       body: Column(
         children: [
           AppFilterBar(
@@ -96,6 +105,158 @@ class _ContractsBody extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+Future<void> _newContract(BuildContext context) async {
+  final cubit = context.read<ContractsCubit>();
+  final created = await showAppSheet<Contract>(
+    context: context,
+    title: 'contract.new'.tr(),
+    builder: (_) => BlocProvider.value(value: cubit, child: const _NewContractForm()),
+  );
+  if (created == null || !context.mounted) return;
+  context.push(AppRoutes.contractDetailFor(created.id));
+}
+
+/// «إنشاء عقد جديد» — the parts the API can store today.
+class _NewContractForm extends StatefulWidget {
+  const _NewContractForm();
+
+  @override
+  State<_NewContractForm> createState() => _NewContractFormState();
+}
+
+class _NewContractFormState extends State<_NewContractForm> {
+  static const _types = ['direct_cash', 'direct_credit', 'installment', 'shelf'];
+
+  final _formKey = GlobalKey<FormState>();
+  final _nameAr = TextEditingController();
+  final _nameEn = TextEditingController();
+  List<LookupItem> _relationships = const [];
+  int? _relationshipId;
+  String? _type = 'direct_cash';
+  String? _billingPeriod = 'monthly';
+  late DateTime _start = DateTime.now();
+  late DateTime _end = DateTime(_start.year + 1, _start.month, _start.day);
+  bool _autoRenew = false;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRelationships();
+  }
+
+  Future<void> _loadRelationships() async {
+    final result = await getIt<LookupsRepository>().items(Lookup.relationships);
+    if (!mounted) return;
+    setState(() => _relationships = result.dataOrNull ?? const []);
+  }
+
+  @override
+  void dispose() {
+    _nameAr.dispose();
+    _nameEn.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pick({required bool start}) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: start ? _start : _end,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() => start ? _start = picked : _end = picked);
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate() || _relationshipId == null || _type == null) return;
+    if (_end.isBefore(_start)) {
+      setState(() => _error = 'contract.end_before_start'.tr());
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final result = await context.read<ContractsCubit>().create(
+          relationshipId: _relationshipId!,
+          contractType: _type!,
+          nameAr: _nameAr.text.trim().isEmpty ? null : _nameAr.text.trim(),
+          nameEn: _nameEn.text.trim().isEmpty ? null : _nameEn.text.trim(),
+          startDate: _start,
+          endDate: _end,
+          autoRenew: _autoRenew,
+          billingPeriod: _type == 'shelf' ? _billingPeriod : null,
+        );
+    if (!mounted) return;
+    if (result case Ok(:final data)) {
+      Navigator.of(context).pop(data);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _error = result.failureMessage;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locale = context.locale.toString();
+    return Form(
+      key: _formKey,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          IdPicker<LookupItem>(
+            label: 'contract.relationship'.tr(),
+            value: _relationshipId,
+            items: _relationships,
+            idOf: (r) => r.id,
+            labelOf: (r) => r.label(locale),
+            onChanged: (id) => setState(() => _relationshipId = id),
+          ),
+          CodePicker(
+            label: 'contract.type'.tr(),
+            value: _type,
+            codes: _types,
+            labelOf: _typeLabel,
+            onChanged: (value) => setState(() => _type = value),
+          ),
+          if (_type == 'shelf')
+            CodePicker(
+              label: 'contract.billing_period'.tr(),
+              value: _billingPeriod,
+              codes: const ['weekly', 'monthly'],
+              labelOf: (code) => 'contract.billing_$code'.tr(),
+              onChanged: (value) => setState(() => _billingPeriod = value),
+            ),
+          AppField(controller: _nameAr, label: 'contract.name_ar'.tr(), hint: 'common.optional'.tr()),
+          AppField(
+            controller: _nameEn,
+            label: 'contract.name_en'.tr(),
+            hint: 'common.optional'.tr(),
+            textDirection: TextDirection.ltr,
+          ),
+          AppDateField(label: 'contract.start_date'.tr(), value: _start, onTap: () => _pick(start: true)),
+          AppDateField(label: 'contract.end_date'.tr(), value: _end, onTap: () => _pick(start: false)),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('contract.auto_renew'.tr()),
+            value: _autoRenew,
+            onChanged: (value) => setState(() => _autoRenew = value),
+          ),
+          AppBanner(message: 'contract.terms_on_web'.tr(), tone: AppTone.info),
+          FormMessage(message: _error),
+          SubmitButton(busy: _busy, label: 'contract.create_draft'.tr(), onPressed: _submit),
         ],
       ),
     );
@@ -161,7 +322,6 @@ class _ContractDetailBody extends StatelessWidget {
             child: ListView(
               padding: AppTokens.pagePadding,
               children: [
-                FormMessage(message: state.action.message),
                 AppCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -231,6 +391,9 @@ class _ContractDetailBody extends StatelessWidget {
 
                 if (contract.approvals.isNotEmpty) ...[
                   AppSectionLabel('contract.approvals'.tr()),
+                  // Without the status buttons, the approval buttons are the
+                  // last actions on screen: their answer sits right above.
+                  if (!canManage) FormMessage(message: state.action.message),
                   AppCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -250,6 +413,7 @@ class _ContractDetailBody extends StatelessWidget {
 
                 if (canManage) ...[
                   AppSectionLabel('contract.change_status'.tr()),
+                  FormMessage(message: state.action.message),
                   Wrap(
                     spacing: AppTokens.space2,
                     runSpacing: AppTokens.space2,

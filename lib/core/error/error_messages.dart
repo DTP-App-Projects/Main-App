@@ -47,6 +47,9 @@ class ErrorMessages {
     'relationship_is_blacklisted',
     'approved_business_relationship_required_before_submit',
     'relationship_must_be_approved_before_submit',
+    'delivery_branch_required',
+    'delivery_branch_invalid',
+    'order_lines_refused',
     'purchase_order_not_found',
     'reason_required',
     'credit_manage_permission_required_for_override',
@@ -88,12 +91,21 @@ class ErrorMessages {
     'target_organization_id_required',
     'contract_approval_not_found',
     'approval_actor_not_allowed',
+    // compliance release
+    'wallet_disabled',
+    'consumer_checkout_disabled',
+    'terms_acceptance_required',
+    'terms_version_outdated',
   };
 
-  static String forCode(String? code, {int status = 0}) {
+  /// Copy for a failure. [serverMessage] is the server's localized `message`
+  /// that compliance rejections carry; it beats the generic fallback but not
+  /// copy we ship ourselves.
+  static String forCode(String? code, {int status = 0, String? serverMessage}) {
     final normalized = normalize(code);
-    if (normalized.isEmpty) return 'errors.generic'.tr();
     if (_translated.contains(normalized)) return 'errors.$normalized'.tr();
+    if (serverMessage != null && serverMessage.trim().isNotEmpty) return serverMessage.trim();
+    if (normalized.isEmpty) return 'errors.generic'.tr();
 
     // v1 hands back translated prose for credential failures. A value with
     // spaces and no underscores is a sentence, not a key.

@@ -83,11 +83,13 @@ class DirectionalChevron extends StatelessWidget {
 
   const DirectionalChevron({super.key, this.size, this.color});
 
+  /// `chevron_right` carries `matchTextDirection`: Flutter mirrors it in RTL
+  /// by itself. Swapping it here as well flipped it back — every forward
+  /// chevron pointed the wrong way in Arabic.
   @override
   Widget build(BuildContext context) {
-    final rtl = Directionality.of(context) == TextDirection.rtl;
     return Icon(
-      rtl ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
+      Icons.chevron_right_rounded,
       size: size,
       color: color ?? context.tokens.iconMuted,
     );

@@ -142,6 +142,15 @@ class SupplierRepository {
         parse: (body) => BusinessRelationship.fromJson(asMap(asMap(body)['relationship'])),
       );
 
+  /// The traders directory: who this supplier could trade with, and where
+  /// each relationship stands. A lookup, so `{items}` rather than a page.
+  Future<ApiResult<List<TraderSummary>>> traders({String? search, int limit = 50}) =>
+      _client.get<List<TraderSummary>>(
+        ApiPaths.lookupTraders,
+        query: {'limit': limit, if (search != null && search.isNotEmpty) 'search': search},
+        parse: (body) => asList(asMap(body)['items'], TraderSummary.fromJson),
+      );
+
   static const relationshipStatuses = [
     'pending_review',
     'approved',

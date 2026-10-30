@@ -50,6 +50,12 @@ class _SuppliersBodyState extends State<_SuppliersBody> {
     _timer = Timer(_debounce, () => context.read<SuppliersCubit>().setSearch(value));
   }
 
+  Future<void> _open(SupplierSummary supplier) async {
+    final cubit = context.read<SuppliersCubit>();
+    final updated = await context.push<SupplierSummary>(AppRoutes.supplierDetailFor(supplier.id));
+    if (updated != null) cubit.replace(updated);
+  }
+
   @override
   Widget build(BuildContext context) {
     final cubit = context.watch<SuppliersCubit>();
@@ -72,7 +78,10 @@ class _SuppliersBodyState extends State<_SuppliersBody> {
               emptyIcon: Icons.storefront_outlined,
               emptyTitle: 'supplier.empty'.tr(),
               emptyBody: _search.text.isEmpty ? null : 'lookup.empty_search'.tr(),
-              itemBuilder: (supplier) => _SupplierCard(supplier: supplier),
+              itemBuilder: (supplier) => _SupplierCard(
+                supplier: supplier,
+                onTap: () => _open(supplier),
+              ),
             ),
           ),
         ],
@@ -83,8 +92,9 @@ class _SuppliersBodyState extends State<_SuppliersBody> {
 
 class _SupplierCard extends StatelessWidget {
   final SupplierSummary supplier;
+  final VoidCallback onTap;
 
-  const _SupplierCard({required this.supplier});
+  const _SupplierCard({required this.supplier, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -92,7 +102,7 @@ class _SupplierCard extends StatelessWidget {
     final t = context.tokens;
 
     return AppCard.item(
-      onTap: () => context.push(AppRoutes.supplierDetailFor(supplier.id)),
+      onTap: onTap,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -114,7 +124,21 @@ class _SupplierCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: AppTokens.space2),
-                    StatusChip(status: supplier.relationshipStatus),
+                    // Already asked: say it in words, not as a raw status.
+                    if (supplier.isRequestPending)
+                      AppBadge(
+                        'supplier.request_sent'.tr(),
+                        tone: AppTone.info,
+                        icon: Icons.hourglass_top_rounded,
+                      )
+                    else if (supplier.canRequestAgain)
+                      AppBadge(
+                        'supplier.request_declined'.tr(),
+                        tone: AppTone.warning,
+                        icon: Icons.replay_rounded,
+                      )
+                    else
+                      StatusChip(status: supplier.relationshipStatus),
                   ],
                 ),
                 const SizedBox(height: AppTokens.space1),
@@ -165,9 +189,12 @@ class OrderReadinessBadge extends StatelessWidget {
     final theme = Theme.of(context);
     final reason = supplier.orderBlockedReason;
     final ready = reason == null;
+    // A sent request is waiting on the supplier, not a problem to fix — it
+    // reads in the calm info tone rather than danger red.
+    final waiting = supplier.isRequestPending;
 
-    final fg = ready ? t.primary : t.dangerText;
-    final bg = ready ? t.primaryTint : t.dangerTint;
+    final fg = ready ? t.primary : (waiting ? t.info : t.dangerText);
+    final bg = ready ? t.primaryTint : (waiting ? t.infoTint : t.dangerTint);
 
     // A pill that can wrap: the blocked reasons are whole sentences.
     return Container(
@@ -180,7 +207,9 @@ class OrderReadinessBadge extends StatelessWidget {
           Padding(
             padding: const EdgeInsetsDirectional.only(top: 1),
             child: Icon(
-              ready ? Icons.check_circle_outline_rounded : Icons.lock_outline_rounded,
+              ready
+                  ? Icons.check_circle_outline_rounded
+                  : (waiting ? Icons.hourglass_top_rounded : Icons.lock_outline_rounded),
               size: 16,
               color: fg,
             ),

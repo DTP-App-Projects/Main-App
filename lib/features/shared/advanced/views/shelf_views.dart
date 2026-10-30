@@ -202,16 +202,23 @@ class _ShelfCountBodyState extends State<_ShelfCountBody> {
         ],
       ),
       bottomNavigationBar: AppBottomBar(
-        child: SubmitButton(
-          busy: state.action.isSubmitting,
-          label: 'shelf.submit'.tr(),
-          onPressed: state.hasLines ? () => cubit.submit(notes: _notes.text) : null,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The submit's answer, in the bar right above the button.
+            FormMessage(message: state.action.message),
+            SubmitButton(
+              busy: state.action.isSubmitting,
+              label: 'shelf.submit'.tr(),
+              onPressed: state.hasLines ? () => cubit.submit(notes: _notes.text) : null,
+            ),
+          ],
         ),
       ),
       body: ListView(
         padding: AppTokens.pagePadding,
         children: [
-          FormMessage(message: state.action.message),
           AppBanner(message: 'shelf.count_hint'.tr(), tone: AppTone.info, icon: Icons.history_rounded),
 
           AppCard(

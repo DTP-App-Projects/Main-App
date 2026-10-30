@@ -5,6 +5,7 @@ import '../../core/network/paged.dart';
 import '../../core/workspace/workspace.dart';
 import '../api_paths.dart';
 import '../models/trade/invoice.dart';
+import '../models/trade/payment_notice.dart';
 import '../models/trade/pricing.dart';
 
 /// The money end of the trader flow: what is owed, claiming a payment, and
@@ -191,6 +192,88 @@ class ReceivablesRepository {
         parse: (body) =>
             CollectionReceipt.fromJson(asMap(asMap(body)['collection_receipt'])),
       );
+
+  // --------------------------------------------------------- payment notices
+
+  /// Both sides. `status` is comma-separated multi-value
+  /// (`submitted,confirmed,rejected`); each row's payload is under
+  /// `formatted`.
+  Future<ApiResult<Paged<PaymentNotice>>> paymentNotices({
+    int page = 1,
+    List<String> statuses = const [],
+    int? invoiceId,
+    int limit = 15,
+  }) =>
+      _client.get<Paged<PaymentNotice>>(
+        ApiPaths.paymentNotices,
+        query: {
+          ...PageParams.limit(page, size: limit),
+          if (statuses.isNotEmpty) 'status': statuses.join(','),
+          'invoice_id': ?invoiceId,
+        },
+        parse: (body) => Paged.fromJson(asMap(body), PaymentNotice.fromJson),
+      );
+
+  Future<ApiResult<PaymentNotice>> paymentNotice(int id) => _client.get<PaymentNotice>(
+        ApiPaths.paymentNotice(id),
+        parse: _noticeOf,
+      );
+
+  /// **The trader's "I paid"** — the website's flow, which replaces
+  /// `collections/claim` in the app. [proofFile] is a path from
+  /// `/v2/uploads`. Not auto-retried: a duplicate notice is a second payment
+  /// for the supplier to reconcile.
+  Future<ApiResult<PaymentNotice>> sendPaymentNotice({
+    required int invoiceId,
+    required String paymentMethod,
+    required double amount,
+    required DateTime paidAt,
+    int? dueScheduleId,
+    int? supplierBankAccountId,
+    String? referenceNo,
+    String? proofFile,
+    String? note,
+  }) =>
+      _client.post<PaymentNotice>(
+        ApiPaths.paymentNotices,
+        body: {
+          'invoice_id': invoiceId,
+          'due_schedule_id': ?dueScheduleId,
+          'supplier_bank_account_id': ?supplierBankAccountId,
+          'payment_method': paymentMethod,
+          'amount': amount,
+          'paid_at': _day(paidAt),
+          'reference_no': ?referenceNo,
+          'proof_file': ?proofFile,
+          'note': ?note,
+        },
+        parse: _noticeOf,
+      );
+
+  /// Supplier: `confirmed` or `rejected`. A rejection needs [reviewNote]
+  /// (3–1000 characters). Confirming creates and confirms the collection
+  /// receipt, and the invoice balance moves.
+  Future<ApiResult<PaymentNotice>> reviewPaymentNotice({
+    required int id,
+    required String status,
+    String? reviewNote,
+  }) =>
+      _client.patch<PaymentNotice>(
+        ApiPaths.paymentNoticeStatus(id),
+        body: {'status': status, 'review_note': ?reviewNote},
+        parse: _noticeOf,
+      );
+
+  /// The methods a payment notice accepts.
+  static const noticePaymentMethods = ['transfer', 'cash', 'cheque', 'gateway', 'adjustment'];
+
+  /// `{payment_notice: {...}}`, possibly with the payload under `formatted`.
+  static PaymentNotice _noticeOf(dynamic body) {
+    final root = asMap(body);
+    var notice = asMap(root['payment_notice'] ?? root['notice'] ?? root['data']);
+    if (notice['formatted'] is Map) notice = asMap(notice['formatted']);
+    return PaymentNotice.fromJson(notice);
+  }
 
   // ------------------------------------------------------------- adjustments
 

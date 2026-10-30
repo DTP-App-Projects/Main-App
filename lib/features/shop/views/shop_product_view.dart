@@ -310,11 +310,13 @@ class _ProductBody extends StatelessWidget {
             ),
             const SizedBox(width: AppTokens.space3),
             Expanded(
-              child: SubmitButton(
-                busy: state.action.isSubmitting,
-                label: 'shop.add_to_cart'.tr(),
-                onPressed: canAdd ? () => _addToCart(context) : null,
-              ),
+              child: consumerCheckoutOpen()
+                  ? SubmitButton(
+                      busy: state.action.isSubmitting,
+                      label: 'shop.add_to_cart'.tr(),
+                      onPressed: canAdd ? () => _addToCart(context) : null,
+                    )
+                  : Text('shop.checkout_closed'.tr(), style: Theme.of(context).textTheme.bodySmall),
             ),
           ],
         ),

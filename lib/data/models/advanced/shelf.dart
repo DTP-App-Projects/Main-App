@@ -1,4 +1,5 @@
 import '../../../core/network/coerce.dart';
+import '../fleet/fleet_common.dart';
 
 /// Stock moved onto a trader's shelf under a consignment contract — sent, but
 /// not sold until the trader reports it.
@@ -296,7 +297,15 @@ class ShelfVisit {
       );
 }
 
-/// Branch-to-branch movement inside one organization.
+/// Branch-to-branch movement inside one organization («النقل الداخلي»).
+///
+/// `draft` → `approved` → `in_transit` → `received` → `closed`, or
+/// `canceled` (with a reason). Dispatch and receipt happen in the warehouse
+/// / driver flow; the supplier app creates, approves, cancels and closes.
+///
+/// Older JSON style: the raw Eloquent row with its relations nested
+/// (`source_branch`, `requested_by`, `lines[].sku`), quantities as
+/// `"5.000"` strings.
 class InternalTransfer {
   final int id;
   final int sourceBranchId;
@@ -306,6 +315,17 @@ class InternalTransfer {
   final String status;
   final List<TransferLine> lines;
 
+  final String code;
+  final String notes;
+  final DateTime? createdAt;
+  final NamedPlace? sourceBranch;
+  final NamedPlace? destinationBranch;
+  final String requestedBy;
+  final String approvedBy;
+  final String driverName;
+  final String vehiclePlate;
+  final String cancellationReason;
+
   const InternalTransfer({
     required this.id,
     required this.sourceBranchId,
@@ -314,19 +334,62 @@ class InternalTransfer {
     required this.priority,
     required this.status,
     required this.lines,
+    this.code = '',
+    this.notes = '',
+    this.createdAt,
+    this.sourceBranch,
+    this.destinationBranch,
+    this.requestedBy = '',
+    this.approvedBy = '',
+    this.driverName = '',
+    this.vehiclePlate = '',
+    this.cancellationReason = '',
   });
 
-  factory InternalTransfer.fromJson(Map<String, dynamic> j) => InternalTransfer(
-        id: asInt(j['id']),
-        sourceBranchId: asInt(j['source_branch_id']),
-        destinationBranchId: asInt(j['destination_branch_id']),
-        requiredByDate: asDate(j['required_by_date']),
-        priority: asStr(j['priority']),
-        status: asStr(j['status']),
-        lines: asList(j['lines'], TransferLine.fromJson),
-      );
+  factory InternalTransfer.fromJson(Map<String, dynamic> j) {
+    final source = NamedPlace.maybe(j['source_branch']);
+    final destination = NamedPlace.maybe(j['destination_branch']);
+    final driver = asMap(j['driver']);
+    return InternalTransfer(
+      id: asInt(j['id']),
+      sourceBranchId: asIntOrNull(j['source_branch_id']) ?? source?.id ?? 0,
+      destinationBranchId: asIntOrNull(j['destination_branch_id']) ?? destination?.id ?? 0,
+      // A bare `Y-m-d`: a calendar day, not an instant.
+      requiredByDate: asDate(j['required_by_date']),
+      priority: asStr(j['priority']),
+      status: asStr(j['status']),
+      lines: asList(j['lines'], TransferLine.fromJson),
+      code: asStr(j['code']),
+      notes: unwrap(j['notes']),
+      createdAt: fleetTime(j['created_at']),
+      sourceBranch: source,
+      destinationBranch: destination,
+      requestedBy: personName(j['requested_by']),
+      approvedBy: personName(j['approved_by']),
+      driverName: driver.isEmpty
+          ? ''
+          : (asStr(driver['name']).isNotEmpty ? asStr(driver['name']) : personName(driver['user'])),
+      vehiclePlate: asStr(asMap(j['vehicle'])['plate_number']),
+      cancellationReason: unwrap(j['cancellation_reason']),
+    );
+  }
+
+  bool get isDraft => status == 'draft';
+
+  /// Once the goods have arrived; the server has the final say.
+  bool get canClose => status == 'received';
+
+  /// `{first_name, last_name}` (a user row), or a plain `name`.
+  static String personName(dynamic v) {
+    if (v is! Map) return asStr(v);
+    final m = asMap(v);
+    final full = '${asStr(m['first_name'])} ${asStr(m['last_name'])}'.trim();
+    return full.isNotEmpty ? full : asStr(m['name']);
+  }
 
   static const priorities = ['normal', 'urgent', 'critical'];
+
+  static const statuses = ['draft', 'approved', 'in_transit', 'received', 'closed', 'canceled'];
 }
 
 class TransferLine {
@@ -336,19 +399,48 @@ class TransferLine {
   final double requestedQty;
   final double fulfilledQty;
 
+  /// From the nested `sku` (`sku_code`); the list loads it without the
+  /// product, the detail with it (`sku.product`).
+  final String skuCode;
+  final String skuNameAr;
+  final String skuNameEn;
+
   const TransferLine({
     required this.id,
     required this.skuId,
     required this.skuName,
     required this.requestedQty,
     required this.fulfilledQty,
+    this.skuCode = '',
+    this.skuNameAr = '',
+    this.skuNameEn = '',
   });
 
-  factory TransferLine.fromJson(Map<String, dynamic> j) => TransferLine(
-        id: asInt(j['id']),
-        skuId: asInt(j['sku_id']),
-        skuName: unwrap(j['sku_name'] ?? j['name']),
-        requestedQty: asNum(j['requested_qty']),
-        fulfilledQty: asNum(j['fulfilled_qty']),
-      );
+  factory TransferLine.fromJson(Map<String, dynamic> j) {
+    final sku = asMap(j['sku']);
+    final product = asMap(sku['product']);
+    String pick(String key) {
+      final own = unwrap(sku[key]);
+      return own.isNotEmpty ? own : unwrap(product[key]);
+    }
+
+    return TransferLine(
+      id: asInt(j['id']),
+      skuId: asInt(j['sku_id']),
+      skuName: unwrap(j['sku_name'] ?? j['name'] ?? sku['name'] ?? product['name']),
+      requestedQty: asNum(j['requested_qty']),
+      fulfilledQty: asNum(j['fulfilled_qty']),
+      skuCode: asStr(sku['sku_code']).isNotEmpty ? asStr(sku['sku_code']) : asStr(sku['code']),
+      skuNameAr: pick('name_ar'),
+      skuNameEn: pick('name_en'),
+    );
+  }
+
+  /// A readable label: the localized name, the plain name, else the code.
+  String label(String locale) {
+    final localized = pickLocalized(locale: locale, ar: skuNameAr, en: skuNameEn);
+    if (localized.isNotEmpty) return localized;
+    if (skuName.isNotEmpty) return skuName;
+    return skuCode.isNotEmpty ? skuCode : '#$skuId';
+  }
 }

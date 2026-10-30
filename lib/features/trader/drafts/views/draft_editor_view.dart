@@ -1,17 +1,21 @@
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../../../core/error/error_messages.dart';
 import '../../../../core/ui/ui.dart';
-import '../../../../core/utils/roots/app_router.dart';
 import '../../../../core/utils/services/remote_services/service_locator.dart';
 import '../../../../data/models/lookups/lookup_item.dart';
 import '../../../../data/models/trade/catalog.dart';
 import '../../../../data/models/trade/purchase_order.dart';
 import '../../../../data/repositories/catalog_repository.dart';
+import '../../../../data/repositories/compliance_repository.dart';
+import '../../../../data/repositories/lookups_repository.dart';
 import '../../../../data/repositories/orders_repository.dart';
+import '../../../shared/compliance/service_invoice_gate.dart';
+import '../../../shared/compliance/views/order_compliance_section.dart';
 import '../view_models/draft_cubit.dart';
+import 'order_submitted.dart';
 
 /// Build an order: pick lines, set the terms, submit.
 ///
@@ -30,7 +34,9 @@ class DraftEditorView extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => BlocProvider(
+  Widget build(BuildContext context) => MultiBlocProvider(
+    providers: [
+      BlocProvider(
         create: (_) => DraftCubit(
           getIt<OrdersRepository>(),
           getIt<CatalogRepository>(),
@@ -38,14 +44,33 @@ class DraftEditorView extends StatelessWidget {
           relationshipId: relationshipId,
           draftId: draftId,
         )..start(),
-        child: _DraftBody(supplierOrganizationId: supplierOrganizationId),
-      );
+      ),
+      BlocProvider(create: (_) => OrdersRestrictionCubit(getIt<ComplianceRepository>())..load()),
+    ],
+    child: _DraftBody(supplierOrganizationId: supplierOrganizationId),
+  );
 }
 
-class _DraftBody extends StatelessWidget {
+class _DraftBody extends StatefulWidget {
   final int supplierOrganizationId;
 
   const _DraftBody({required this.supplierOrganizationId});
+
+  @override
+  State<_DraftBody> createState() => _DraftBodyState();
+}
+
+class _DraftBodyState extends State<_DraftBody> {
+  final _notes = TextEditingController();
+  bool _notesFilled = false;
+
+  int get supplierOrganizationId => widget.supplierOrganizationId;
+
+  @override
+  void dispose() {
+    _notes.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,6 +79,12 @@ class _DraftBody extends StatelessWidget {
     final draft = state.draft;
     final theme = Theme.of(context);
     final t = context.tokens;
+    // An overdue service invoice: the server would refuse the submit.
+    final restricted = context.watch<OrdersRestrictionCubit>().state;
+    if (draft != null && !_notesFilled) {
+      _notes.text = draft.notes;
+      _notesFilled = true;
+    }
 
     return Scaffold(
       appBar: AppBar(title: Text('order.draft_title'.tr())),
@@ -69,10 +100,21 @@ class _DraftBody extends StatelessWidget {
                   MoneyText(draft.grandTotal, style: AppType.ledger(t.textPrimary)),
                 ],
               ),
-              child: SubmitButton(
-                busy: state.action.isSubmitting,
-                label: 'order.submit'.tr(),
-                onPressed: draft.canSubmit ? () => _submit(context) : null,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // The submit's error, right above the submit button.
+                  FormMessage(
+                    message:
+                        state.action.message ?? (restricted ? 'fees.orders_blocked'.tr() : null),
+                  ),
+                  SubmitButton(
+                    busy: state.action.isSubmitting,
+                    label: 'order.submit'.tr(),
+                    onPressed: draft.canSubmit && !restricted ? () => _submit(context) : null,
+                  ),
+                ],
               ),
             ),
       body: Builder(
@@ -90,9 +132,8 @@ class _DraftBody extends StatelessWidget {
           return ListView(
             padding: AppTokens.pagePadding,
             children: [
-              FormMessage(message: state.action.message),
-              FormMessage(message: state.lineError),
-
+              if (restricted && state.actionCode != ServiceInvoiceCodes.overdue)
+                const ServiceInvoiceOverdueBanner(),
               // ---- header: who, how to pay, where to deliver -------------
               AppCard(
                 child: Column(
@@ -117,13 +158,44 @@ class _DraftBody extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: AppTokens.space5),
+                    // The contract the guided order chose: its prices and
+                    // terms are the ones the lines resolve against.
+                    if (draft.contractId != null)
+                      Padding(
+                        padding: const EdgeInsetsDirectional.only(bottom: AppTokens.space4),
+                        child: Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: AppBadge(
+                            'order.contract_applied'.tr(namedArgs: {'id': '${draft.contractId}'}),
+                            tone: AppTone.brand,
+                            icon: Icons.description_outlined,
+                          ),
+                        ),
+                      ),
                     _PaymentTermPicker(state: state),
                     _BranchPicker(state: state),
+                    AppField(
+                      controller: _notes,
+                      label: 'order.notes'.tr(),
+                      hint: 'common.optional'.tr(),
+                      maxLines: 2,
+                      textInputAction: TextInputAction.newline,
+                      serverError: state.action.fieldError('notes'),
+                    ),
                   ],
                 ),
               ),
 
+              // ---- a refused submit: every rule, and where to go next -----
+              if (state.ruleErrors.isNotEmpty || state.actionCode.isNotEmpty) ...[
+                const SizedBox(height: AppTokens.space3),
+                GuidedRefusal(code: state.actionCode),
+                if (state.ruleErrors.isNotEmpty) _RuleErrorsCard(errors: state.ruleErrors),
+              ],
+
               // ---- lines -------------------------------------------------
+              // A line's error, right above the row with the add-line button.
+              FormMessage(message: state.lineError),
               AppSectionLabel(
                 'order.lines'.tr(),
                 trailing: AppButton.text(
@@ -162,6 +234,7 @@ class _DraftBody extends StatelessWidget {
                           ),
                         _DraftLineRow(
                           line: draft.lines[i],
+                          errors: cubit.errorsForSku(draft.lines[i].skuId),
                           onRemove: () => _confirmRemove(context, draft.lines[i]),
                         ),
                       ],
@@ -179,14 +252,8 @@ class _DraftBody extends StatelessWidget {
                   ),
                   child: Column(
                     children: [
-                      DetailRow(
-                        label: 'order.subtotal'.tr(),
-                        value: MoneyText(draft.subtotal),
-                      ),
-                      DetailRow(
-                        label: 'order.tax_total'.tr(),
-                        value: MoneyText(draft.taxTotal),
-                      ),
+                      DetailRow(label: 'order.subtotal'.tr(), value: MoneyText(draft.subtotal)),
+                      DetailRow(label: 'order.tax_total'.tr(), value: MoneyText(draft.taxTotal)),
                     ],
                   ),
                 ),
@@ -221,10 +288,14 @@ class _DraftBody extends StatelessWidget {
       context: context,
       title: 'order.pick_sku'.tr(),
       lookup: Lookup.skus,
+      // The contract makes the price the contract's. No `branch_id`: it
+      // filters the supplier's stock by *its* branch, and the delivery
+      // branch is the trader's (it answered 0 for stock the website shows).
       query: {
         'supplier_organization_id': supplierOrganizationId,
         'relationship_id': ?cubit.relationshipId,
         'payment_term_id': ?cubit.state.draft?.paymentTermId,
+        'contract_id': ?cubit.state.draft?.contractId,
         'inventory_context': 'catalog',
       },
     );
@@ -235,10 +306,12 @@ class _DraftBody extends StatelessWidget {
     final qty = await showAppSheet<double>(
       context: context,
       title: sku.displayName(locale),
-      subtitle: 'order.qty_rules'.tr(namedArgs: {
-        'min': _QuantitySheetState._format(sku.minOrderQty),
-        'step': _QuantitySheetState._format(sku.orderStepQty),
-      }),
+      subtitle: 'order.qty_rules'.tr(
+        namedArgs: {
+          'min': _QuantitySheetState._format(sku.minOrderQty),
+          'step': _QuantitySheetState._format(sku.orderStepQty),
+        },
+      ),
       builder: (_) => _QuantitySheet(sku: sku),
     );
     if (qty == null) return;
@@ -248,26 +321,53 @@ class _DraftBody extends StatelessWidget {
 
   Future<void> _submit(BuildContext context) async {
     final cubit = context.read<DraftCubit>();
-    final order = await cubit.submit();
+    final order = await cubit.submit(notes: _notes.text);
     if (order == null || !context.mounted) return;
 
-    // Replace rather than push: the draft is gone, and Back should not offer
-    // to submit it again.
-    context.pushReplacement(AppRoutes.orderDetailFor(order.id));
+    await announceSubmittedOrder(context, order, cubit.state.creditReview);
   }
 }
+
+/// Every `errors[]` entry of a refused submit, in the server's words.
+class _RuleErrorsCard extends StatelessWidget {
+  final List<SubmitRuleError> errors;
+
+  const _RuleErrorsCard({required this.errors});
+
+  @override
+  Widget build(BuildContext context) => AppBanner(
+    tone: AppTone.danger,
+    icon: Icons.rule_rounded,
+    title: 'order.submit_blocked'.tr(),
+    message: [for (final e in errors) '• ${ruleErrorText(e)}'].join('\n'),
+  );
+}
+
+/// The entry's own sentence, else the app's copy for its code.
+String ruleErrorText(SubmitRuleError error) =>
+    error.message.isNotEmpty ? error.message : ErrorMessages.forCode(error.code);
 
 class _DraftLineRow extends StatelessWidget {
   final DraftLine line;
   final VoidCallback onRemove;
 
-  const _DraftLineRow({required this.line, required this.onRemove});
+  /// The submit's refusals about this line — the row turns red with them.
+  final List<SubmitRuleError> errors;
+
+  const _DraftLineRow({required this.line, required this.onRemove, this.errors = const []});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final t = context.tokens;
 
+    return Container(
+      color: errors.isEmpty ? null : t.danger.withValues(alpha: 0.06),
+      child: _row(context, theme, t),
+    );
+  }
+
+  Widget _row(BuildContext context, ThemeData theme, AppTokens t) {
     return Padding(
       padding: const EdgeInsetsDirectional.fromSTEB(
         AppTokens.space4,
@@ -298,6 +398,14 @@ class _DraftLineRow extends StatelessWidget {
                     MoneyText(line.unitPrice, style: theme.textTheme.bodySmall),
                   ],
                 ),
+                for (final error in errors)
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(top: AppTokens.space1),
+                    child: Text(
+                      ruleErrorText(error),
+                      style: theme.textTheme.bodySmall?.copyWith(color: t.danger),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -379,10 +487,7 @@ class _QuantitySheetState extends State<_QuantitySheet> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              AppCircleButton(
-                icon: Icons.remove_rounded,
-                onPressed: () => _nudge(-1),
-              ),
+              AppCircleButton(icon: Icons.remove_rounded, onPressed: () => _nudge(-1)),
               const SizedBox(width: AppTokens.space3),
               Expanded(
                 child: TextField(
@@ -404,10 +509,7 @@ class _QuantitySheetState extends State<_QuantitySheet> {
                 ),
               ),
               const SizedBox(width: AppTokens.space3),
-              AppCircleButton(
-                icon: Icons.add_rounded,
-                onPressed: () => _nudge(1),
-              ),
+              AppCircleButton(icon: Icons.add_rounded, onPressed: () => _nudge(1)),
             ],
           ),
         ),
@@ -444,16 +546,15 @@ class _PaymentTermPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => IdPicker(
-        label: 'order.payment_term'.tr(),
-        value: state.draft?.paymentTermId,
-        items: state.paymentTerms,
-        idOf: (term) => term.id,
-        labelOf: (term) => term.label,
-        required: false,
-        error: state.action.fieldError('payment_term_id'),
-        onChanged: (id) =>
-            context.read<DraftCubit>().updateHeader(paymentTermId: id),
-      );
+    label: 'order.payment_term'.tr(),
+    value: state.draft?.paymentTermId,
+    items: state.paymentTerms,
+    idOf: (term) => term.id,
+    labelOf: (term) => term.label,
+    required: false,
+    error: state.action.fieldError('payment_term_id'),
+    onChanged: (id) => context.read<DraftCubit>().updateHeader(paymentTermId: id),
+  );
 }
 
 /// The draft stores only the branch **id**, so the chosen row is kept here to
@@ -467,18 +568,46 @@ class _BranchPicker extends StatefulWidget {
   State<_BranchPicker> createState() => _BranchPickerState();
 }
 
+/// A refused submit's branch rule, shown on the picker it is about.
+String? _branchRuleError(DraftState state) {
+  for (final error in state.ruleErrors) {
+    if (error.isBranch) return ruleErrorText(error);
+  }
+  return state.actionCode.startsWith('delivery_branch') ? state.action.message : null;
+}
+
 class _BranchPickerState extends State<_BranchPicker> {
   LookupItem? _branch;
 
+  /// A reopened draft (or one the guided order created) already has a
+  /// branch; show its name instead of an empty picker.
+  @override
+  void initState() {
+    super.initState();
+    final id = widget.state.draft?.deliveryBranchId;
+    if (id != null) _restore(id);
+  }
+
+  Future<void> _restore(int id) async {
+    final result = await getIt<LookupsRepository>().items(Lookup.branches);
+    if (!mounted) return;
+    for (final item in result.dataOrNull ?? const <LookupItem>[]) {
+      if (item.id == id) setState(() => _branch = item);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => LookupField(
-        label: 'order.delivery_branch'.tr(),
-        lookup: Lookup.branches,
-        value: _branch,
-        error: widget.state.action.fieldError('delivery_branch_id'),
-        onChanged: (item) {
-          setState(() => _branch = item);
-          context.read<DraftCubit>().updateHeader(deliveryBranchId: item?.id);
-        },
-      );
+    label: 'order.delivery_branch'.tr(),
+    lookup: Lookup.branches,
+    value: _branch,
+    // Required since the submit applies the website's rules
+    // (`delivery_branch_required` / `delivery_branch_invalid`).
+    required: true,
+    error: widget.state.action.fieldError('delivery_branch_id') ?? _branchRuleError(widget.state),
+    onChanged: (item) {
+      setState(() => _branch = item);
+      context.read<DraftCubit>().updateHeader(deliveryBranchId: item?.id);
+    },
+  );
 }

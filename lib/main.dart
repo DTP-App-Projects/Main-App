@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-import 'core/deeplink/deep_link.dart';
 import 'core/push/push_service.dart';
 import 'core/session/session_cubit.dart';
 import 'core/session/session_store.dart';
@@ -21,6 +20,7 @@ import 'core/utils/theme/app_theme.dart';
 import 'core/workspace/workspace.dart';
 import 'core/workspace/workspace_cubit.dart';
 import 'core/workspace/workspace_state.dart';
+import 'features/shared/compliance/org_compliance_cubit.dart';
 import 'features/shared/notifications/presentation/view_models/notifications_cubit.dart';
 import 'firebase_options.dart';
 
@@ -119,7 +119,7 @@ Future<void> _initNotifications() async {
       if (payload == null || payload.isEmpty) return;
       try {
         final data = (jsonDecode(payload) as Map).cast<String, dynamic>();
-        unawaited(getIt<PushService>().openLink(DeepLink.fromData(data)));
+        unawaited(getIt<PushService>().openData(data));
       } catch (e) {
         debugPrint('Unreadable notification payload: $e');
       }
@@ -163,6 +163,7 @@ class DigitalTradePortal extends StatelessWidget {
         BlocProvider.value(value: getIt<WorkspaceCubit>()),
         BlocProvider.value(value: getIt<SessionCubit>()),
         BlocProvider.value(value: getIt<NotificationsCubit>()),
+        BlocProvider.value(value: getIt<OrgComplianceCubit>()),
       ],
       // The theme is per-workspace and server-driven: switching sides must
       // visibly recolour the app.

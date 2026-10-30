@@ -11,6 +11,7 @@ import 'package:digital_trade_portal/data/repositories/account_repository.dart';
 import 'package:digital_trade_portal/data/repositories/auth_repository.dart';
 import 'package:digital_trade_portal/data/repositories/bootstrap_repository.dart';
 import 'package:digital_trade_portal/data/repositories/catalog_repository.dart';
+import 'package:digital_trade_portal/data/repositories/compliance_repository.dart';
 import 'package:digital_trade_portal/data/repositories/contracts_repository.dart';
 import 'package:digital_trade_portal/data/repositories/lookups_repository.dart';
 import 'package:digital_trade_portal/data/repositories/notifications_repository.dart';
@@ -1234,7 +1235,6 @@ final _screens = <_Screen>[
       workspace: Workspace.supplier),
   _Screen('pushed-collections', () => const CollectionsInboxView(),
       workspace: Workspace.supplier),
-  _Screen('pushed-returns-inbox', () => const ReturnsInboxView(), workspace: Workspace.supplier),
   _Screen('pushed-relationships', () => const RelationshipsView(),
       workspace: Workspace.supplier),
   _Screen('pushed-credit', () => const CreditView(relationshipId: 51),
@@ -1292,6 +1292,7 @@ void main() {
       ..registerSingleton<LookupsRepository>(LookupsRepository(client))
       ..registerSingleton<CatalogRepository>(CatalogRepository(client))
       ..registerSingleton<OrdersRepository>(OrdersRepository(client))
+      ..registerSingleton<ComplianceRepository>(ComplianceRepository(client))
       ..registerSingleton<ShipmentsRepository>(ShipmentsRepository(client))
       ..registerSingleton<ReceivablesRepository>(ReceivablesRepository(client))
       ..registerSingleton<UploadsRepository>(UploadsRepository(client))

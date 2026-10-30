@@ -50,7 +50,17 @@ class ShipmentsRepository {
         ApiPaths.deliveryNoteTracking(id),
         // Polling must not be collapsed into one stale in-flight answer.
         dedupe: false,
-        parse: (body) => DeliveryNote.fromJson(asMap(asMap(body)['delivery_note'])),
+        parse: (body) {
+          final root = asMap(body);
+          final note = asMap(root['delivery_note']);
+          // `receiver_otp` and `live` may sit beside `delivery_note` rather
+          // than in it; either placement is read.
+          return DeliveryNote.fromJson({
+            ...note,
+            for (final key in const ['receiver_otp', 'live'])
+              if (note[key] == null && root[key] != null) key: root[key],
+          });
+        },
       );
 
   /// Supplier-only **upsert** — send [deliveryNoteId] to update.
@@ -188,17 +198,44 @@ class ShipmentsRepository {
     required List<GoodsReceiptLineInput> lines,
     String? proofFile,
     String? notes,
+    String? receiverName,
   }) =>
       _client.post<GoodsReceipt>(
         ApiPaths.goodsReceipts,
         body: {
           'delivery_note_id': deliveryNoteId,
+          'receiver_name': ?receiverName,
           'proof_file': ?proofFile,
           'notes': ?notes,
           'lines': lines.map((line) => line.toJson()).toList(),
         },
         parse: (body) => GoodsReceipt.fromJson(asMap(asMap(body)['goods_receipt'])),
       );
+
+  // ------------------------------------------------------------ edit window
+
+  /// Whether the trader may still correct the received quantities of this
+  /// delivery note's receipt, and until when. Errors come back as
+  /// `{status, message: <code>}`; the normalizer reads the code from there.
+  Future<ApiResult<EditWindow>> editWindow(int deliveryNoteId) => _client.get<EditWindow>(
+        ApiPaths.deliveryNoteEditWindow(deliveryNoteId),
+        parse: (body) => EditWindow.fromJson(asMap(body)),
+      );
+
+  /// Corrects received / rejected quantities while the window is open.
+  /// Not auto-retried.
+  Future<ApiResult<void>> adjustReceipt({
+    required int deliveryNoteId,
+    required List<ReceiptAdjustment> adjustments,
+  }) =>
+      _client.post<void>(
+        ApiPaths.deliveryNoteEditWindowAdjust(deliveryNoteId),
+        body: {'adjustments': adjustments.map((a) => a.toJson()).toList()},
+      );
+
+  /// Ends the window early — the quantities are final from here on.
+  Future<ApiResult<void>> closeEditWindow(int deliveryNoteId) =>
+      _client.post<void>(ApiPaths.deliveryNoteEditWindowClose(deliveryNoteId));
 
   /// `reason` is 10–1000 characters. A `410 goods_receipt_edit_window_closed`
   /// means the window has passed — a real answer, not a transient failure.
@@ -233,12 +270,21 @@ class GoodsReceiptLineInput {
   final double rejectedQty;
   final String? rejectionReason;
 
+  /// What was not accepted, split (compliance release): «منه نقص» and
+  /// «منه معيب», with the defect described.
+  final double shortageQty;
+  final double defectQty;
+  final String? defectNote;
+
   const GoodsReceiptLineInput({
     required this.deliveryNoteLineId,
     required this.skuId,
     required this.receivedQty,
     this.rejectedQty = 0,
     this.rejectionReason,
+    this.shortageQty = 0,
+    this.defectQty = 0,
+    this.defectNote,
   });
 
   Map<String, dynamic> toJson() => {
@@ -247,5 +293,8 @@ class GoodsReceiptLineInput {
         'received_qty': receivedQty,
         'rejected_qty': rejectedQty,
         'rejection_reason': ?rejectionReason,
+        if (rejectedQty > 0) 'shortage_qty': shortageQty,
+        if (rejectedQty > 0) 'defect_qty': defectQty,
+        'defect_note': ?defectNote,
       };
 }

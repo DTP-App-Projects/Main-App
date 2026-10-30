@@ -1,10 +1,11 @@
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-
+import '../../../compliance/org_compliance_cubit.dart';
 import '../../../../../core/session/session_cubit.dart';
 import '../../../../../core/ui/ui.dart';
 import '../../../../../core/utils/services/remote_services/service_locator.dart';
+import '../../../../../data/models/bootstrap/organization.dart';
 import '../../../../../data/models/common/country.dart';
 import '../../../../../data/repositories/auth_repository.dart';
 import '../../../../../data/repositories/onboarding_repository.dart';
@@ -43,6 +44,7 @@ class _OrganizationFormState extends State<_OrganizationForm> {
   final _commercialRegNo = TextEditingController();
   final _taxNo = TextEditingController();
   final _vatNo = TextEditingController();
+  final _notes = TextEditingController();
 
   int? _countryId;
   int? _cityId;
@@ -62,6 +64,7 @@ class _OrganizationFormState extends State<_OrganizationForm> {
       _commercialRegNo,
       _taxNo,
       _vatNo,
+      _notes,
     ]) {
       controller.dispose();
     }
@@ -76,14 +79,19 @@ class _OrganizationFormState extends State<_OrganizationForm> {
   /// middle of a build.
   void _prefill() {
     final organization = context.read<SessionCubit>().state.organization;
-    if (organization == null) return;
+    if (organization != null) _fill(organization);
+  }
 
+  /// The session's `/v2/bootstrap` summary has no legal identity, so the full
+  /// row from `GET /v2/organization` overwrites it once it arrives.
+  void _fill(Organization organization) {
     _legalAr.text = organization.legalNameAr;
     _legalEn.text = organization.legalNameEn;
     _tradeName.text = organization.tradeName;
     _commercialRegNo.text = organization.commercialRegNo;
     _taxNo.text = organization.taxNo;
     _vatNo.text = organization.vatNo;
+    _notes.text = organization.notes;
     _countryId = organization.countryId;
     _cityId = organization.cityId;
   }
@@ -118,19 +126,24 @@ class _OrganizationFormState extends State<_OrganizationForm> {
       commercialRegNo: _commercialRegNo.text,
       taxNo: _taxNo.text,
       vatNo: _vatNo.text,
+      notes: _notes.text,
     );
     if (saved == null || !mounted) return;
 
     // The organization drives routing and the shell header, so the session
     // has to learn about the change.
-    await context.read<SessionCubit>().refresh();
+    // Silent: a loud refresh routes through the splash screen, which tore
+    // down the wizard (and the guided walk) behind this one.
+    await context.read<SessionCubit>().refresh(silent: true);
     // Tells the wizard what to re-read, so it does not reload everything.
     if (mounted) Navigator.of(context).pop(OnboardingStepKind.organization);
   }
 
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<OrganizationFormCubit, OrganizationFormState>(
+    return BlocConsumer<OrganizationFormCubit, OrganizationFormState>(
+      listenWhen: (previous, current) => previous.existing == null && current.existing != null,
+      listener: (context, state) => setState(() => _fill(state.existing!)),
       builder: (context, state) {
         if (state.loadingCountries) {
           return Scaffold(
@@ -151,6 +164,7 @@ class _OrganizationFormState extends State<_OrganizationForm> {
         final cities =
             state.countries.where((c) => c.id == _countryId).expand((c) => c.cities).toList();
         final theme = Theme.of(context);
+        final locked = context.watch<OrgComplianceCubit>().state?.registrationLocked ?? false;
 
         return Scaffold(
           appBar: AppBar(title: Text('organization.details_title'.tr())),
@@ -175,7 +189,15 @@ class _OrganizationFormState extends State<_OrganizationForm> {
                     ),
                   ),
                   const SizedBox(height: AppTokens.space4),
-                  FormMessage(message: state.submit.message),
+                  // Once the organization is active the registration data is
+                  // frozen (spec §3): shown, never edited by members.
+                  if (locked)
+                    AppBanner(
+                      key: const Key('registration_locked_banner'),
+                      tone: AppTone.info,
+                      icon: Icons.lock_outline_rounded,
+                      message: 'registration.locked_hint'.tr(),
+                    ),
 
                   _FormSection(
                     label: 'organization.section_identity'.tr(),
@@ -183,6 +205,7 @@ class _OrganizationFormState extends State<_OrganizationForm> {
                     children: [
                       AppField(
                         controller: _legalAr,
+                        enabled: !locked,
                         label: 'organization.legal_name_ar'.tr(),
                         required: true,
                         validator: AppValidators.required,
@@ -190,6 +213,7 @@ class _OrganizationFormState extends State<_OrganizationForm> {
                       ),
                       AppField(
                         controller: _legalEn,
+                        enabled: !locked,
                         label: 'organization.legal_name_en'.tr(),
                         hint: 'common.optional'.tr(),
                         serverError: state.submit.fieldError('legal_name_en'),
@@ -239,15 +263,18 @@ class _OrganizationFormState extends State<_OrganizationForm> {
                     children: [
                       AppField(
                         controller: _commercialRegNo,
+                        enabled: !locked,
                         label: 'organization.commercial_reg_no'.tr(),
                         keyboardType: TextInputType.number,
                         icon: Icons.badge_outlined,
-                        hint: 'common.optional'.tr(),
+                        required: true,
+                        validator: AppValidators.required,
                         textDirection: TextDirection.ltr,
                         serverError: state.submit.fieldError('commercial_reg_no'),
                       ),
                       AppField(
                         controller: _taxNo,
+                        enabled: !locked,
                         label: 'organization.tax_no'.tr(),
                         keyboardType: TextInputType.number,
                         hint: 'common.optional'.tr(),
@@ -256,12 +283,21 @@ class _OrganizationFormState extends State<_OrganizationForm> {
                       ),
                       AppField(
                         controller: _vatNo,
+                        enabled: !locked,
                         label: 'organization.vat_no'.tr(),
                         keyboardType: TextInputType.number,
                         hint: 'common.optional'.tr(),
                         textDirection: TextDirection.ltr,
                         textInputAction: TextInputAction.done,
                         serverError: state.submit.fieldError('vat_no'),
+                      ),
+                      AppField(
+                        controller: _notes,
+                        label: 'organization.notes'.tr(),
+                        hint: 'common.optional'.tr(),
+                        maxLines: 3,
+                        textInputAction: TextInputAction.newline,
+                        serverError: state.submit.fieldError('notes'),
                       ),
                     ],
                   ),
@@ -270,10 +306,18 @@ class _OrganizationFormState extends State<_OrganizationForm> {
             ),
           ),
           bottomNavigationBar: AppBottomBar(
-            child: SubmitButton(
-              busy: state.submit.isSubmitting,
-              label: 'common.save'.tr(),
-              onPressed: _save,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // The save's answer, right above the button.
+                FormMessage(message: state.submit.message),
+                SubmitButton(
+                  busy: state.submit.isSubmitting,
+                  label: 'common.save'.tr(),
+                  onPressed: _save,
+                ),
+              ],
             ),
           ),
         );

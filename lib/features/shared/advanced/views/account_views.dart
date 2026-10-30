@@ -66,8 +66,6 @@ class _AccountBody extends StatelessWidget {
                 AppTokens.space8,
               ),
               children: [
-                FormMessage(message: state.action.message),
-
                 AppSectionLabel(
                   'account.devices'.tr(),
                   padding: const EdgeInsetsDirectional.fromSTEB(
@@ -143,6 +141,8 @@ class _AccountBody extends StatelessWidget {
                 ),
 
                 AppSectionLabel('account.danger'.tr()),
+                // The answer to the last action, above the actions it answers.
+                FormMessage(message: state.action.message),
                 _DeletionSection(state: state),
               ],
             ),
@@ -338,8 +338,6 @@ class _NafathSheetState extends State<NafathSheet> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        FormMessage(message: state.action.message),
-
         if (transaction == null) ...[
           AppField(
             controller: _nationalId,
@@ -352,6 +350,7 @@ class _NafathSheetState extends State<NafathSheet> {
             textInputAction: TextInputAction.done,
             helper: 'account.national_id_hint'.tr(),
           ),
+          FormMessage(message: state.action.message),
           SubmitButton(
             busy: state.action.isSubmitting,
             label: 'account.nafath_start'.tr(),
@@ -407,6 +406,7 @@ class _NafathSheetState extends State<NafathSheet> {
             ],
           ),
           const SizedBox(height: AppTokens.space6),
+          FormMessage(message: state.action.message),
           if (transaction.isApproved)
             AppButton.solid(
               label: 'common.close'.tr(),

@@ -62,6 +62,24 @@ class OrgDocument {
 class UploadRules {
   UploadRules._();
 
+  /// `POST /onboarding/documents` is stricter than the generic uploads:
+  /// images (HEIC included), PDF and spreadsheets, at most 8 MB.
+  static const documentMaxBytes = 8 * 1024 * 1024;
+
+  static const documentExtensions = <String>[
+    'jpg',
+    'jpeg',
+    'png',
+    'webp',
+    'heic',
+    'pdf',
+    'xls',
+    'xlsx',
+    'csv',
+  ];
+
+  static bool isAllowedDocument(String path) => documentExtensions.contains(extensionOf(path));
+
   static const maxBytes = 10 * 1024 * 1024;
 
   static const allowedExtensions = <String>[

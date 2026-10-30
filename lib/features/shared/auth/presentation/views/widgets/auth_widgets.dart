@@ -1,5 +1,8 @@
-import 'package:easy_localization/easy_localization.dart';
+import 'package:easy_localization/easy_localization.dart' hide TextDirection;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:pin_code_fields/pin_code_fields.dart';
 
 import '../../../../../../core/i18n/locale_switch.dart';
 import '../../../../../../core/shared_widgets/brand_background.dart';
@@ -20,8 +23,8 @@ class AuthScaffold extends StatelessWidget {
   /// segmented bar.
   final (int, int)? step;
 
-  /// A form-level message, above the card so it is not scrolled away by the
-  /// field it is about.
+  /// A form-level message (an API error), directly above the [cta] it is
+  /// the answer to — the place the eye is when the button was pressed.
   final Widget? banner;
 
   /// The primary action, under the card.
@@ -67,63 +70,71 @@ class AuthScaffold extends StatelessWidget {
               child: ConstrainedBox(
                 // Keeps copy and fields readable on a tablet.
                 constraints: const BoxConstraints(maxWidth: 460),
-                child: ListView(
+                // Not a lazy ListView: a field scrolled far off screen would be
+                // unmounted and skipped by Form.validate(). Auth forms are
+                // short, so building them all is cheap and keeps validation
+                // complete.
+                child: SingleChildScrollView(
                   padding: const EdgeInsetsDirectional.fromSTEB(
                     AppTokens.gutter,
                     AppTokens.space4,
                     AppTokens.gutter,
                     AppTokens.space8,
                   ),
-                  children: [
-                    Row(
-                      children: [
-                        if (canPop)
-                          IconButton(
-                            onPressed: () => Navigator.of(context).maybePop(),
-                            tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-                            icon: const AppBackIcon(),
-                            padding: EdgeInsets.zero,
-                          ),
-                        const Spacer(),
-                        // The one pre-auth surface where the language can be
-                        // changed — someone who cannot read the screen needs it.
-                        const LocaleToggleButton(),
-                      ],
-                    ),
-                    SizedBox(height: showLogo ? AppTokens.space8 : AppTokens.space6),
-                    if (showLogo) ...[
-                      const Align(
-                        alignment: AlignmentDirectional.centerStart,
-                        child: AppLogoTile(size: 80),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          if (canPop)
+                            IconButton(
+                              onPressed: () => Navigator.of(context).maybePop(),
+                              tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+                              icon: const AppBackIcon(),
+                              padding: EdgeInsets.zero,
+                            ),
+                          const Spacer(),
+                          // The one pre-auth surface where the language can be
+                          // changed — someone who cannot read the screen needs it.
+                          const LocaleToggleButton(),
+                        ],
                       ),
-                      const SizedBox(height: AppTokens.space6),
-                    ],
-                    if (step case (final current, final total)) ...[
-                      _StepCounter(current: current, total: total),
-                      const SizedBox(height: AppTokens.space5),
-                    ],
-                    Text(title, style: theme.textTheme.headlineMedium),
-                    if (subtitle != null) ...[
-                      const SizedBox(height: AppTokens.space2),
-                      Text(
-                        subtitle!,
-                        style: theme.textTheme.bodyLarge?.copyWith(color: t.textSecondary),
-                      ),
-                    ],
-                    const SizedBox(height: AppTokens.space6),
-                    ?banner,
-                    if (plain)
-                      ...children
-                    else
-                      AppCard(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: children,
+                      SizedBox(height: showLogo ? AppTokens.space8 : AppTokens.space6),
+                      if (showLogo) ...[
+                        const Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: AppLogoTile(size: 80),
                         ),
-                      ),
-                    if (cta != null) ...[const SizedBox(height: AppTokens.space8), cta!],
-                    ?footer,
-                  ],
+                        const SizedBox(height: AppTokens.space6),
+                      ],
+                      if (step case (final current, final total)) ...[
+                        _StepCounter(current: current, total: total),
+                        const SizedBox(height: AppTokens.space5),
+                      ],
+                      Text(title, style: theme.textTheme.headlineMedium),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: AppTokens.space2),
+                        Text(
+                          subtitle!,
+                          style: theme.textTheme.bodyLarge?.copyWith(color: t.textSecondary),
+                        ),
+                      ],
+                      const SizedBox(height: AppTokens.space6),
+                      if (plain)
+                        ...children
+                      else
+                        AppCard(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: children,
+                          ),
+                        ),
+                      const SizedBox(height: AppTokens.space8),
+                      ?banner,
+                      ?cta,
+                      ?footer,
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -282,6 +293,172 @@ class AuthChoiceCard extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Six Driver-style boxes for a mailed code (password reset, email
+/// confirmation). Digits read LTR in both languages; the platform can
+/// autofill it (`oneTimeCode`) and a long press pastes it.
+class AuthCodeBoxes extends StatelessWidget {
+  final TextEditingController controller;
+  final String? error;
+  final ValueChanged<String> onChanged;
+  final ValueChanged<String> onCompleted;
+
+  const AuthCodeBoxes({
+    super.key,
+    required this.controller,
+    required this.error,
+    required this.onChanged,
+    required this.onCompleted,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final theme = Theme.of(context);
+    final hasError = error != null;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final box = ((constraints.maxWidth - 5 * AppTokens.space2) / 6).clamp(36.0, 52.0);
+        return Directionality(
+          textDirection: TextDirection.ltr,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              PinCodeTextField(
+                appContext: context,
+                length: 6,
+                controller: controller,
+                // The controller belongs to the step's State.
+                autoDisposeControllers: false,
+                keyboardType: TextInputType.number,
+                // Arabic-Indic digits first: `digitsOnly` is ASCII-only and
+                // silently dropped a pasted «١٢٣٤٥٦».
+                inputFormatters: [
+                  const _AsciiDigitsFormatter(),
+                  FilteringTextInputFormatter.digitsOnly,
+                ],
+                animationType: AnimationType.fade,
+                enableActiveFill: true,
+                autoFocus: true,
+                // The code comes by email: iOS offers it from Mail
+                // (`oneTimeCode`); Android's hint is the SMS-OTP one, which
+                // would only suggest unrelated text messages.
+                enablePinAutofill: defaultTargetPlatform == TargetPlatform.iOS,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                cursorColor: t.primary,
+                textStyle: theme.textTheme.titleLarge,
+                errorTextSpace: 22,
+                errorTextDirection: Directionality.of(context),
+                validator: (value) => (value == null || value.trim().length != 6)
+                    ? 'validation.code_length'.tr()
+                    : null,
+                pinTheme: PinTheme(
+                  shape: PinCodeFieldShape.box,
+                  borderRadius: AppTokens.mdRadius,
+                  fieldHeight: box + 4,
+                  fieldWidth: box,
+                  borderWidth: 1,
+                  activeBorderWidth: 1.5,
+                  selectedBorderWidth: 1.5,
+                  activeColor: hasError ? t.fieldError : t.primary,
+                  selectedColor: t.primary,
+                  inactiveColor: hasError ? t.fieldError : t.inputBorder,
+                  activeFillColor: t.inputFill,
+                  selectedFillColor: t.surface,
+                  inactiveFillColor: t.inputFill,
+                  errorBorderColor: t.fieldError,
+                ),
+                onChanged: onChanged,
+                onCompleted: onCompleted,
+              ),
+              if (hasError)
+                Text(
+                  error!,
+                  textDirection: Directionality.of(context),
+                  style: theme.textTheme.labelSmall?.copyWith(color: t.fieldError),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// ٠-٩ and ۰-۹ become 0-9, so a code typed on an Arabic keyboard or pasted
+/// from an Arabic mail still fills the boxes.
+class _AsciiDigitsFormatter extends TextInputFormatter {
+  const _AsciiDigitsFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final text = String.fromCharCodes(
+      newValue.text.runes.map((r) {
+        if (r >= 0x0660 && r <= 0x0669) return 0x30 + r - 0x0660;
+        if (r >= 0x06F0 && r <= 0x06F9) return 0x30 + r - 0x06F0;
+        return r;
+      }),
+    );
+    return text == newValue.text ? newValue : newValue.copyWith(text: text);
+  }
+}
+
+/// «مؤشر قوة» under a new password: length, mixed case, digits, symbols.
+class PasswordStrengthMeter extends StatelessWidget {
+  final String password;
+
+  const PasswordStrengthMeter({super.key, required this.password});
+
+  /// 0 (empty) to 4 (strong).
+  static int score(String value) {
+    if (value.isEmpty) return 0;
+    var points = 0;
+    if (value.length >= 8) points++;
+    if (value.length >= 12) points++;
+    if (RegExp(r'[a-z]').hasMatch(value) && RegExp(r'[A-Z]').hasMatch(value)) points++;
+    if (RegExp(r'\d').hasMatch(value)) points++;
+    if (RegExp(r'[^A-Za-z0-9]').hasMatch(value)) points++;
+    if (value.length < 8) return 1;
+    return points.clamp(1, 4);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final value = score(password);
+    if (value == 0) return const SizedBox.shrink();
+    final color = switch (value) {
+      1 => t.danger,
+      2 => t.warning,
+      _ => t.primary,
+    };
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(bottom: AppTokens.space3),
+      child: Row(
+        children: [
+          for (var i = 1; i <= 4; i++) ...[
+            if (i > 1) const SizedBox(width: AppTokens.space1),
+            Expanded(
+              child: Container(
+                height: 4,
+                decoration: BoxDecoration(
+                  color: i <= value ? color : t.neutralTint,
+                  borderRadius: AppTokens.fullRadius,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(width: AppTokens.space2),
+          Text(
+            'auth.strength_$value'.tr(),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+          ),
+        ],
       ),
     );
   }

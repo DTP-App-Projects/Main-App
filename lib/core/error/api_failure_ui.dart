@@ -13,13 +13,43 @@ extension ApiResultUi<T> on ApiResult<T> {
   String? get failureMessage => when(
         ok: (_) => null,
         noContent: () => null,
-        invalid: (_) => 'errors.validation_error'.tr(),
-        failed: (code, status, _) => ErrorMessages.forCode(code, status: status),
+        invalid: (_) => _invalidSummary ?? 'errors.validation_error'.tr(),
+        failed: (code, status, _) => _failedMessage(code, status),
         wrongWorkspace: () => ErrorMessages.forCode('unexpected_error'),
         offline: () => ErrorMessages.forCode('offline'),
         rateLimited: (_) => ErrorMessages.forCode('rate_limited'),
         sessionExpired: () => ErrorMessages.forCode('unexpected_error'),
       );
+
+  /// The server's `text`, else the first bag message — never a generic
+  /// "check all fields" when the server said what is wrong.
+  String? get _invalidSummary {
+    final self = this;
+    return self is Invalid<T> ? self.summary : null;
+  }
+
+  /// A `permission_denied` names the permission it lacked; when the app has
+  /// copy for that one («ليست لديك صلاحية إدارة العلاقات»), it says so.
+  String _failedMessage(String code, int status) {
+    final self = this;
+    if (code == 'permission_denied' && self is Failed<T> && (self.permission ?? '').isNotEmpty) {
+      final key = 'errors.permission_${self.permission!.replaceAll('.', '_')}';
+      final specific = key.tr();
+      if (specific != key) return specific;
+    }
+    return ErrorMessages.forCode(code, status: status, serverMessage: _serverMessage);
+  }
+
+  String? get _serverMessage {
+    final self = this;
+    return self is Failed<T> ? self.message : null;
+  }
+
+  /// The stable code of a [Failed], for branching. Empty for anything else.
+  String get failureCode {
+    final self = this;
+    return self is Failed<T> ? self.code : '';
+  }
 
   /// True only for [Offline], so a screen can show the offline state rather
   /// than a generic error with a retry that will fail the same way.
@@ -31,12 +61,12 @@ extension ApiResultUi<T> on ApiResult<T> {
         noContent: () => const SubmitState(status: FormStatus.success),
         invalid: (bag) => SubmitState(
           status: FormStatus.failure,
-          message: 'errors.validation_error'.tr(),
+          message: _invalidSummary ?? 'errors.validation_error'.tr(),
           bag: bag,
         ),
         failed: (code, status, _) => SubmitState(
           status: FormStatus.failure,
-          message: ErrorMessages.forCode(code, status: status),
+          message: _failedMessage(code, status),
         ),
         wrongWorkspace: () => SubmitState(
           status: FormStatus.failure,

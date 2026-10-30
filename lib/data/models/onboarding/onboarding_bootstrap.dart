@@ -3,19 +3,27 @@ import '../../../core/workspace/workspace.dart';
 import '../bootstrap/journey.dart';
 import '../bootstrap/organization.dart';
 
-/// `GET /api/v2/onboarding/bootstrap` → `{organization, journey, profiles}`.
+/// `GET /api/v2/onboarding/bootstrap` → `{organization, journey, profiles,
+/// sector_options, channel_options, document_type_options, …}`.
 ///
 /// The wizard is driven from [journey]; [profiles] is the convenience copy of
-/// what has been filled in so far.
+/// what has been filled in so far. The `*_options` lists feed the pickers —
+/// their codes are the server's, never hardcoded here.
 class OnboardingBootstrap {
   final Organization? organization;
   final Journey journey;
   final List<OnboardingProfile> profiles;
+  final List<BusinessSector> sectorOptions;
+  final List<CodeOption> channelOptions;
+  final List<CodeOption> documentTypeOptions;
 
   const OnboardingBootstrap({
     required this.organization,
     required this.journey,
     required this.profiles,
+    this.sectorOptions = const [],
+    this.channelOptions = const [],
+    this.documentTypeOptions = const [],
   });
 
   factory OnboardingBootstrap.fromJson(Map<String, dynamic> j) {
@@ -31,6 +39,9 @@ class OnboardingBootstrap {
       organization: organization,
       journey: journey,
       profiles: OnboardingProfile.listFrom(j['profiles']),
+      sectorOptions: asList(j['sector_options'], BusinessSector.fromJson),
+      channelOptions: asList(j['channel_options'], CodeOption.fromJson),
+      documentTypeOptions: asList(j['document_type_options'], CodeOption.fromJson),
     );
   }
 
@@ -56,8 +67,16 @@ class OnboardingProfile {
   final String supplierNature;
 
   final List<int> sectorIds;
+
+  /// **Not** what is saved: the bootstrap merges the saved channels with ones
+  /// guessed from the sectors, and `score`/`missing`/`checks` count the
+  /// guesses too. `profile/submit` checks only the saved list, so this is a
+  /// pre-selection for the form, never proof that the step is done.
   final List<String> channelCodes;
   final String notes;
+
+  /// Set when the reviewer rejected the profile: «سبب الرفض».
+  final String rejectionReason;
 
   const OnboardingProfile({
     required this.id,
@@ -67,6 +86,7 @@ class OnboardingProfile {
     required this.sectorIds,
     required this.channelCodes,
     required this.notes,
+    this.rejectionReason = '',
   });
 
   factory OnboardingProfile.fromJson(Map<String, dynamic> j) => OnboardingProfile(
@@ -77,7 +97,12 @@ class OnboardingProfile {
         sectorIds: _ids(j['sector_ids'] ?? j['sectors']),
         channelCodes: asStrList(j['channel_codes']),
         notes: unwrap(j['notes']),
+        rejectionReason: unwrap(j['rejection_reason']),
       );
+
+  /// Rejected and waiting to be fixed. A resubmitted profile keeps its old
+  /// reason, which must not show once it is back in review.
+  bool get isRejected => status == 'rejected' || (rejectionReason.isNotEmpty && isDraft);
 
   /// The server may key the profiles by type rather than sending a list; both
   /// shapes fold into the same thing.
@@ -94,7 +119,8 @@ class OnboardingProfile {
 
   bool get isSupplier => profileType == 'supplier';
   bool get isDraft => status.isEmpty || status == 'draft';
-  bool get isActive => status == 'active';
+  /// Approved by the reviewer.
+  bool get isActive => status == 'active' || status == 'approved';
 
   /// Already sent for review — the forms go read-only rather than letting the
   /// user edit something a reviewer is looking at.
@@ -122,10 +148,30 @@ class BusinessSector {
         id: asInt(j['id']),
         // Lookups usually resolve `name` by Accept-Language already; the
         // per-locale pair is kept when the server sends it.
-        nameAr: unwrap(j['name_ar'] ?? j['name']),
-        nameEn: unwrap(j['name_en'] ?? j['name']),
+        nameAr: unwrap(j['name_ar'] ?? j['display_name'] ?? j['name']),
+        nameEn: unwrap(j['name_en'] ?? j['display_name'] ?? j['name']),
       );
 
   String displayName(String locale) =>
       pickLocalized(locale: locale, ar: nameAr, en: nameEn);
+}
+
+/// `{code, label}` — a server enum value with its label already localized by
+/// `Accept-Language` (`channel_options`, `document_type_options`).
+class CodeOption {
+  final String code;
+  final String label;
+
+  const CodeOption({required this.code, required this.label});
+
+  factory CodeOption.fromJson(Map<String, dynamic> j) =>
+      CodeOption(code: asStr(j['code']), label: unwrap(j['label'] ?? j['name']));
+
+  /// The label for [code] in [options], or the code itself when unknown.
+  static String labelIn(List<CodeOption> options, String code) {
+    for (final option in options) {
+      if (option.code == code) return option.label.isEmpty ? code : option.label;
+    }
+    return code;
+  }
 }

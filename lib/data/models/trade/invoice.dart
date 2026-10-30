@@ -1,4 +1,5 @@
 import '../../../core/network/coerce.dart';
+import '../compliance/trade_compliance.dart';
 import 'purchase_order.dart';
 import 'supplier_summary.dart';
 
@@ -34,7 +35,11 @@ class Invoice {
 
   final List<InvoiceLine> lines;
 
+  /// ZATCA block, chain refs, frozen hash (compliance release).
+  final InvoiceCompliance compliance;
+
   const Invoice({
+    this.compliance = InvoiceCompliance.empty,
     required this.id,
     required this.purchaseOrderId,
     required this.purchaseOrder,
@@ -78,6 +83,7 @@ class Invoice {
         dueSchedules: asList(j['due_schedules'], DueSchedule.fromJson),
         outstandingAmount: asNum(j['outstanding_amount']),
         lines: asList(j['lines'], InvoiceLine.fromJson),
+        compliance: InvoiceCompliance.fromJson(j),
       );
 
   bool get isPaid => status == 'paid' || outstandingAmount <= 0;
@@ -184,7 +190,11 @@ class CollectionReceipt {
   final String status;
   final NamedRef? invoice;
 
+  /// The trader's note on a payment notice.
+  final String note;
+
   const CollectionReceipt({
+    this.note = '',
     required this.id,
     required this.businessRelationshipId,
     required this.invoiceId,
@@ -214,6 +224,7 @@ class CollectionReceipt {
         proofFile: asStr(j['proof_file']),
         status: asStr(j['status']),
         invoice: j['invoice'] is Map ? NamedRef.fromJson(asMap(j['invoice'])) : null,
+        note: unwrap(j['note'] ?? j['notes']),
       );
 
   bool get isConfirmed => status == 'confirmed';

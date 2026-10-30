@@ -30,6 +30,34 @@ class ContractsCubit extends PagedCubit<Contract> {
       _repo.contracts(page: page, status: status);
 
   Future<void> setStatus(String? value) => applyFilter(() => status = value);
+
+  /// Creates a **draft** contract (guide Part 7.2): relationship, type, names,
+  /// dates, auto-renew. The API keeps no `terms[]` yet (live, 2026-10-06), so
+  /// pricing and operating terms are still set on the website.
+  Future<ApiResult<Contract>> create({
+    required int relationshipId,
+    required String contractType,
+    String? nameAr,
+    String? nameEn,
+    DateTime? startDate,
+    DateTime? endDate,
+    bool autoRenew = false,
+    String? billingPeriod,
+  }) async {
+    final result = await _repo.saveContract(
+      relationshipId: relationshipId,
+      contractType: contractType,
+      nameAr: nameAr,
+      nameEn: nameEn,
+      startDate: startDate,
+      endDate: endDate,
+      autoRenew: autoRenew,
+      billingPeriod: billingPeriod,
+      status: 'draft',
+    );
+    if (result is Ok<Contract>) await refresh();
+    return result;
+  }
 }
 
 @immutable
@@ -435,7 +463,12 @@ class WalletState {
   final bool offline;
   final SubmitState action;
 
+  /// `404 wallet_disabled`: the owner switched the wallet off (spec §13).
+  /// An "unavailable" state, not an error with a retry.
+  final bool disabled;
+
   const WalletState({
+    this.disabled = false,
     this.loading = true,
     this.wallet,
     this.transactions = const [],
@@ -454,8 +487,10 @@ class WalletState {
     bool? offline,
     SubmitState? action,
     bool clearError = false,
+    bool? disabled,
   }) =>
       WalletState(
+        disabled: disabled ?? this.disabled,
         loading: loading ?? this.loading,
         wallet: wallet ?? this.wallet,
         transactions: transactions ?? this.transactions,
@@ -478,6 +513,9 @@ class WalletCubit extends Cubit<WalletState> {
     final wallet = await _repo.wallet();
     if (wallet case Ok(:final data)) {
       emit(state.copyWith(loading: false, wallet: data));
+    } else if (wallet.failureCode == 'wallet_disabled') {
+      emit(state.copyWith(loading: false, disabled: true));
+      return;
     } else {
       emit(state.copyWith(
         loading: false,

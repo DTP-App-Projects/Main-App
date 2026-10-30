@@ -92,10 +92,33 @@ class Organization {
         stats: OrgStats.fromJson(asMap(j['stats'])),
       );
 
-  /// The legal-identity step is complete when the four required fields of
-  /// `PUT /v2/onboarding/organization` are filled.
+  /// The legal-identity step is complete when the four fields the server
+  /// requires are filled **and** the commercial registration, which the
+  /// guide marks required («السجل التجاري *», Part 2.1).
   bool get hasLegalIdentity =>
-      legalNameAr.isNotEmpty && tradeName.isNotEmpty && countryId != null && cityId != null;
+      legalNameAr.isNotEmpty &&
+      tradeName.isNotEmpty &&
+      commercialRegNo.isNotEmpty &&
+      countryId != null &&
+      cityId != null;
+
+  /// Which workspaces are really approved. `approved_workspaces` lists a
+  /// workspace while its profile is still in review, so each profile's own
+  /// status in the journey decides; the list is the fallback when the
+  /// journey carries none.
+  Set<String> get approvedProfileWorkspaces {
+    const approved = {'active', 'approved'};
+    final trader = journey.trader.status;
+    final supplier = journey.supplier.status;
+    if (trader.isEmpty && supplier.isEmpty) return approvedWorkspaces.toSet();
+    return {
+      if (approved.contains(trader)) 'trader',
+      if (approved.contains(supplier)) 'supplier',
+    };
+  }
+
+  /// Suspended or blocked by the platform: the shell explains it.
+  bool get isRestricted => status == 'suspended' || status == 'blacklisted';
 
   bool get isHybrid => businessMode == BusinessMode.hybrid;
   bool get isActive => status == 'active';

@@ -1,7 +1,9 @@
 import 'package:digital_trade_portal/core/workspace/workspace.dart';
 import 'package:digital_trade_portal/data/models/trade/catalog.dart';
 import 'package:digital_trade_portal/data/models/trade/delivery_note.dart';
+import 'package:digital_trade_portal/data/models/trade/supplier_summary.dart';
 import 'package:digital_trade_portal/data/repositories/catalog_repository.dart';
+import 'package:digital_trade_portal/features/trader/suppliers/view_models/suppliers_cubits.dart';
 import 'package:digital_trade_portal/data/repositories/orders_repository.dart';
 import 'package:digital_trade_portal/data/repositories/receivables_repository.dart';
 import 'package:digital_trade_portal/data/repositories/shipments_repository.dart';
@@ -57,6 +59,84 @@ void main() {
       // Two polls, two requests — collapsing them would freeze the screen on
       // one snapshot.
       expect(adapter.requests.length, 2);
+    });
+  });
+
+  group('supplier detail', () {
+    test('a sent request reads as pending, not as no relationship', () async {
+      // The live shape (2026-10-06): the link is a sibling of `supplier`.
+      final (client, _) = clientWith(FakeAdapter.json(const {
+        'supplier': {'id': 23, 'display_name': 'Factory', 'status': 'active'},
+        'relationship': {
+          'id': 6,
+          'status': 'pending_review',
+          'classification': 'C',
+          'active_contracts_count': 0,
+        },
+        'contracts': [],
+      }));
+
+      final supplier = (await CatalogRepository(client).supplier(23)).dataOrNull!;
+
+      expect(supplier.relationshipId, 6);
+      expect(supplier.hasRelationship, isTrue);
+      expect(supplier.isRequestPending, isTrue, reason: 'the button shows "Request sent"');
+      expect(supplier.orderBlockedReason, 'relationship_pending');
+    });
+
+    test('the list swaps in the row the detail screen returned', () async {
+      final (client, _) = clientWith(FakeAdapter.json(const {
+        'current_page': 1,
+        'last_page': 1,
+        'per_page': 15,
+        'total': 2,
+        'data': [
+          {'id': 5, 'formatted': {'id': 5, 'display_name': 'A', 'relationship_status': 'none'}},
+          {'id': 23, 'formatted': {'id': 23, 'display_name': 'B', 'relationship_status': 'none'}},
+        ],
+      }));
+      final cubit = SuppliersCubit(CatalogRepository(client));
+      await cubit.load();
+
+      cubit.replace(SupplierSummary.fromJson(const {
+        'id': 23,
+        'display_name': 'B',
+        'relationship_id': 6,
+        'relationship_status': 'pending_review',
+      }));
+
+      final rows = cubit.state.page.items;
+      expect(rows.map((s) => s.id), [5, 23], reason: 'same order, nothing reloaded');
+      expect(rows.last.isRequestPending, isTrue);
+      expect(rows.first.isRequestPending, isFalse);
+      await cubit.close();
+    });
+
+    test('a declined request (closed) can be sent again', () async {
+      // Live, after the supplier rejects: relationship `closed`, request
+      // `rejected`. Re-posting reopens it as `pending_review`.
+      final (client, _) = clientWith(FakeAdapter.json(const {
+        'supplier': {'id': 23, 'display_name': 'Factory'},
+        'relationship': {'id': 6, 'status': 'closed'},
+      }));
+
+      final supplier = (await CatalogRepository(client).supplier(23)).dataOrNull!;
+
+      expect(supplier.canRequestAgain, isTrue, reason: 'the button reads "Request again"');
+      expect(supplier.isRequestPending, isFalse);
+      expect(supplier.orderBlockedReason, 'relationship_declined');
+    });
+
+    test('no relationship yet still offers the request', () async {
+      final (client, _) = clientWith(FakeAdapter.json(const {
+        'supplier': {'id': 23, 'display_name': 'Factory'},
+        'relationship': null,
+      }));
+
+      final supplier = (await CatalogRepository(client).supplier(23)).dataOrNull!;
+
+      expect(supplier.hasRelationship, isFalse);
+      expect(supplier.isRequestPending, isFalse);
     });
   });
 
@@ -244,7 +324,44 @@ void main() {
 
       expect(cubit.state.lines.map((l) => l.receivedQty), [12, 4]);
       expect(cubit.state.hasMismatch, isFalse);
+      // Only the receiver's name is missing (guide 11.1).
+      expect(cubit.state.lines.any((l) => l.isIncomplete), isFalse);
+      expect(cubit.state.missingReason, isTrue);
+      cubit.setReceiverName('Ahmed');
       expect(cubit.state.missingReason, isFalse);
+    });
+
+    test('not accepted splits into defective and shortage; a defect needs its note', () async {
+      final (client, adapter) = clientWith(FakeAdapter((options) async {
+        if (options.method == 'POST') return jsonBody(const {'goods_receipt': {'id': 3, 'lines': []}});
+        return jsonBody(const {
+          'delivery_note': {
+            'id': 5,
+            'lines': [
+              {'id': 1, 'sku_id': 9, 'shipped_qty': 10},
+            ],
+          },
+        });
+      }));
+      final cubit = GoodsReceiptCubit(ShipmentsRepository(client), 5);
+      await cubit.load();
+      cubit
+        ..setReceiverName('Ahmed')
+        ..updateLine(1, received: 7, rejected: 3, reason: 'Damaged carton', defect: 2);
+
+      expect(cubit.state.lines.single.shortageQty, 1);
+      expect(cubit.state.missingReason, isTrue, reason: 'the defect note is required');
+
+      cubit.updateLine(1, defectNote: 'Crushed boxes');
+      await cubit.submit();
+      final body = adapter.requests.lastWhere((r) => r.method == 'POST').data as Map;
+      final line = (body['lines'] as List).single as Map;
+
+      expect(body['receiver_name'], 'Ahmed');
+      expect(line['shortage_qty'], 1);
+      expect(line['defect_qty'], 2);
+      expect(line['defect_note'], 'Crushed boxes');
+      await cubit.close();
     });
   });
 }

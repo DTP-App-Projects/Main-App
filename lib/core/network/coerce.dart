@@ -26,6 +26,15 @@ int? asIntOrNull(dynamic v) {
 
 double asNum(dynamic v) => v == null ? 0 : (v is num ? v.toDouble() : double.tryParse('$v') ?? 0);
 
+/// An amount that may be absent: `null` / `""` stay null rather than reading
+/// as zero (`rate_per_km: null` is "not offered", not "free").
+double? asNumOrNull(dynamic v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  final s = asStr(v).trim();
+  return s.isEmpty ? null : double.tryParse(s);
+}
+
 bool asBool(dynamic v) => v == true || v == 1 || v == '1' || v == 'true';
 
 /// `""` and `null` both mean "unset" in this API. Dates are `Y-m-d H:i:s`
@@ -33,6 +42,31 @@ bool asBool(dynamic v) => v == true || v == 1 || v == '1' || v == 'true';
 DateTime? asDate(dynamic v) {
   final s = asStr(v);
   return s.isEmpty ? null : DateTime.tryParse(s.replaceFirst(' ', 'T'));
+}
+
+/// Evidence times (`signed_at`, `accepted_at`, `expires_at`, …). The server
+/// stores them in UTC but renders them two ways: ISO with an offset
+/// (`2026-10-12T17:45:14+03:00`, `…+00:00`), or a bare `Y-m-d H:i:s` that is
+/// **already Riyadh wall time** (seen on marketer assignments: `19:11:44`
+/// for an event at 16:11 UTC). Both come back as a UTC instant; show it with
+/// [AppDates.riyadh].
+DateTime? asUtcDate(dynamic v) {
+  final s = asStr(v).trim();
+  if (s.isEmpty) return null;
+  var iso = s.replaceFirst(' ', 'T');
+  if (!iso.contains('T')) iso = '${iso}T00:00:00';
+  final hasZone = RegExp(r'(Z|[+-]\d{2}:?\d{2})$').hasMatch(iso);
+  return DateTime.tryParse(hasZone ? iso : '$iso+03:00')?.toUtc();
+}
+
+/// A bare `Y-m-d H:i:s` the server labels as UTC (`issued_at_utc`,
+/// `occurred_at_utc`). Values with an offset are honoured as usual.
+DateTime? asUtcNaive(dynamic v) {
+  final s = asStr(v).trim();
+  if (s.isEmpty) return null;
+  final iso = s.replaceFirst(' ', 'T');
+  final hasZone = RegExp(r'(Z|[+-]\d{2}:?\d{2})$').hasMatch(iso);
+  return DateTime.tryParse(hasZone ? iso : '${iso}Z')?.toUtc();
 }
 
 Map<String, dynamic> asMap(dynamic v) =>

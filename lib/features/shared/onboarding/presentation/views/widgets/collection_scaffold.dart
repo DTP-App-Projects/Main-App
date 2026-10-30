@@ -44,9 +44,9 @@ class CollectionScaffold<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // `submit` keeps its success status across the reload that follows, so
-    // this survives until the screen is left.
-    final changed = state.submit.isSuccess;
+    // Sticky: reopening the editor resets `submit`, which used to make a
+    // saved row look unsaved to the wizard.
+    final changed = state.savedAny;
 
     return PopScope(
       canPop: false,

@@ -92,7 +92,7 @@ class _ProductCard extends StatelessWidget {
     final locale = context.locale.toString();
 
     return AppCard.item(
-      onTap: () => context.push(AppRoutes.productDetailFor(product.id)),
+      onTap: () => context.push(AppRoutes.productDetailFor(product.detailId)),
       child: Row(
         children: [
           const AppIconCircle(Icons.inventory_2_outlined, size: 40),

@@ -11,7 +11,9 @@ import '../../features/shared/notifications/presentation/view_models/notificatio
 import '../deeplink/deep_link.dart';
 import '../deeplink/deep_link_router.dart';
 import '../session/session_store.dart';
+import '../utils/roots/app_router.dart';
 import '../workspace/workspace.dart';
+import 'driver_trip_events.dart';
 
 /// FCM token plumbing.
 ///
@@ -28,6 +30,9 @@ class PushService {
   /// Set once the router exists — see the service locator.
   DeepLinkRouter? deepLinks;
   NotificationsCubit? notifications;
+
+  /// Driver-at-the-door pushes, fanned out to any open tracking screen.
+  final driverTrips = DriverTripEvents();
 
   PushService(this._auth, this._bootstrap, this._store);
 
@@ -49,25 +54,48 @@ class PushService {
   Future<void> attachTapHandlers() async {
     // Background tap.
     _openedSub ??= FirebaseMessaging.onMessageOpenedApp.listen(
-      (message) => openLink(DeepLink.fromData(message.data)),
+      (message) => openData(message.data),
     );
 
     // Terminated cold start.
     final initial = await FirebaseMessaging.instance.getInitialMessage();
-    if (initial != null) await openLink(DeepLink.fromData(initial.data));
+    if (initial != null) await openData(initial.data);
   }
 
   /// Foreground arrival: the banner is shown by the caller, the badge here.
-  void onForegroundMessage(RemoteMessage message) =>
-      notifications?.onPushReceived();
+  void onForegroundMessage(RemoteMessage message) {
+    notifications?.onPushReceived();
+    // An open tracking screen refreshes itself off this.
+    final trip = DriverTripPush.tryParse(message.data);
+    if (trip != null) driverTrips.add(trip);
+  }
 
-  Future<void> openLink(DeepLink link) async {
+  /// A tapped push, however it was reached. Driver-trip pushes carry no
+  /// `click_action`, so they are routed here rather than through [DeepLink].
+  Future<void> openData(Map<String, dynamic> data) async {
+    final trip = DriverTripPush.tryParse(data);
+    if (trip == null) return openLink(DeepLink.fromData(data));
+
+    driverTrips.add(trip);
+    // The screen for this delivery is already open: the event refreshed it.
+    if (driverTrips.isWatched(trip)) return;
+
+    final id = trip.deliveryNoteId;
+    // Without a delivery note id there is no way to resolve the route stop to
+    // a shipment; the list is the closest screen.
+    await openLink(
+      DeepLink(clickAction: DriverTripPush.type, entityId: id, side: Workspace.trader),
+      path: id == null ? AppRoutes.traderShipments : AppRoutes.shipmentDetailFor(id),
+    );
+  }
+
+  Future<void> openLink(DeepLink link, {String? path}) async {
     final router = deepLinks;
     if (router == null) {
       debugPrint('Deep link arrived before the router was wired: ${link.clickAction}');
       return;
     }
-    await router.open(link);
+    await router.open(link, overridePath: path);
   }
 
   /// Safe to call whenever the session or the organization changes; both calls

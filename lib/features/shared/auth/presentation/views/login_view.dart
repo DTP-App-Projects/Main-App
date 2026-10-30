@@ -56,7 +56,12 @@ class _LoginBodyState extends State<_LoginBody> {
   Widget build(BuildContext context) {
     // Routing after a successful login is the router's job — SessionCubit
     // flips to authenticated and the redirect picks the shell.
-    return BlocBuilder<LoginCubit, SubmitState>(
+    return BlocConsumer<LoginCubit, SubmitState>(
+      // Right password, unconfirmed email: the server already mailed a code.
+      listener: (context, state) {
+        final challenge = context.read<LoginCubit>().takeVerification();
+        if (challenge != null) context.go(AppRoutes.verifyEmail, extra: challenge);
+      },
       builder: (context, state) {
         final cubit = context.read<LoginCubit>();
 

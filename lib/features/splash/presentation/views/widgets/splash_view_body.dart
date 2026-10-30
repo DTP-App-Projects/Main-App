@@ -54,7 +54,10 @@ class _SplashViewBodyState extends State<SplashViewBody> with SingleTickerProvid
     final theme = Theme.of(context);
     final t = context.tokens;
 
+    // Expand: otherwise the Stack takes the width of its widest line of text
+    // and the brand canvas covers only part of the screen.
     return Stack(
+      fit: StackFit.expand,
       children: [
         const Positioned.fill(child: BrandBackground()),
         SafeArea(

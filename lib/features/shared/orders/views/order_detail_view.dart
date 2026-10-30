@@ -1,10 +1,16 @@
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../compliance/otp_acceptance_sheet.dart';
+import '../../compliance/views/document_flow_strip.dart';
+import '../../compliance/views/order_compliance_section.dart';
 import '../../../../core/i18n/app_dates.dart';
 import '../../../../core/ui/ui.dart';
+import '../../../../core/utils/roots/app_router.dart';
 import '../../../../core/utils/services/remote_services/service_locator.dart';
+import '../../../../data/models/compliance/trade_compliance.dart';
 import '../../../../data/models/trade/purchase_order.dart';
 import '../../../../data/repositories/orders_repository.dart';
 import '../../../trader/orders/view_models/orders_cubits.dart';
@@ -19,9 +25,9 @@ class OrderDetailView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => BlocProvider(
-        create: (_) => OrderDetailCubit(getIt<OrdersRepository>(), orderId)..load(),
-        child: const _OrderDetailBody(),
-      );
+    create: (_) => OrderDetailCubit(getIt<OrdersRepository>(), orderId)..load(),
+    child: const _OrderDetailBody(),
+  );
 }
 
 class _OrderDetailBody extends StatelessWidget {
@@ -56,8 +62,6 @@ class _OrderDetailBody extends StatelessWidget {
             child: ListView(
               padding: AppTokens.pagePadding,
               children: [
-                FormMessage(message: state.action.message),
-
                 // ---- header -------------------------------------------------
                 AppCard(
                   shadow: true,
@@ -123,10 +127,53 @@ class _OrderDetailBody extends StatelessWidget {
                   ),
                 ),
 
+                // ---- credit hold: the order exists but waits on credit ------
+                if (_creditHold.contains(order.creditCheckStatus)) ...[
+                  const SizedBox(height: AppTokens.space3),
+                  AppBanner(
+                    tone: AppTone.warning,
+                    icon: Icons.credit_card_off_outlined,
+                    margin: EdgeInsetsDirectional.zero,
+                    title: 'order.credit_hold'.tr(),
+                    message: 'order.credit_hold_body'.tr(),
+                  ),
+                ],
+
+                // ---- compliance: supply model, hold, chain, evidence --------
+                OrderComplianceSection(
+                  order: order,
+                  actionCode: state.actionCode,
+                  onChanged: cubit.load,
+                ),
+
                 // ---- cancellation request -----------------------------------
                 if (order.hasOpenCancelRequest) ...[
                   const SizedBox(height: AppTokens.space4),
                   _CancelRequestCard(order: order),
+                ],
+
+                // ---- ship: the selling side issues a delivery note -----------
+                // `viewer_role`, not the workspace, decides (hybrid orgs).
+                if (!order.isTraderView && order.canShip) ...[
+                  const SizedBox(height: AppTokens.space4),
+                  AppCard(
+                    child: Row(
+                      children: [
+                        const AppIconCircle(Icons.local_shipping_outlined),
+                        const SizedBox(width: AppTokens.space3),
+                        Expanded(child: Text('dn.ready_hint'.tr(), style: theme.textTheme.bodyMedium)),
+                        const SizedBox(width: AppTokens.space2),
+                        AppButton.primary(
+                          label: 'dn.create'.tr(),
+                          height: 40,
+                          onPressed: () async {
+                            await context.push(AppRoutes.deliveryNoteNewFor(order.id));
+                            await cubit.load();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
 
                 // ---- lines --------------------------------------------------
@@ -156,8 +203,11 @@ class _OrderDetailBody extends StatelessWidget {
                   ),
                 ),
 
+                // ---- shipments, receipts, invoices, payments ---------------
+                DocumentFlowStrip(flow: state.flow, side: order.viewerWorkspace),
+
                 // ---- timeline -----------------------------------------------
-                if (order.timeline.isNotEmpty) ...[
+                if (cubit.timeline.isNotEmpty) ...[
                   AppSectionLabel('onboarding.timeline'.tr()),
                   AppCard(
                     padding: const EdgeInsetsDirectional.fromSTEB(
@@ -166,12 +216,12 @@ class _OrderDetailBody extends StatelessWidget {
                       AppTokens.space5,
                       AppTokens.space1,
                     ),
-                    child: DocumentTimeline(events: order.timeline),
+                    child: DocumentTimeline(events: cubit.timeline),
                   ),
                 ],
 
                 const SizedBox(height: AppTokens.space5),
-                _OrderFooter(order: order),
+                _OrderFooter(order: order, timeline: cubit.timeline),
               ],
             ),
           );
@@ -180,6 +230,9 @@ class _OrderDetailBody extends StatelessWidget {
     );
   }
 }
+
+/// `credit_check_status` values that leave a created order on credit hold.
+const _creditHold = {'failed', 'manual_review'};
 
 class _LineRow extends StatelessWidget {
   final PurchaseOrderLine line;
@@ -231,8 +284,9 @@ class _LineRow extends StatelessWidget {
 /// event — the latest `at`, not `timeline.last`, which is the oldest.
 class _OrderFooter extends StatelessWidget {
   final PurchaseOrder order;
+  final List<TimelineEvent> timeline;
 
-  const _OrderFooter({required this.order});
+  const _OrderFooter({required this.order, required this.timeline});
 
   static String roleLabel(String role) {
     final key = switch (role) {
@@ -258,7 +312,7 @@ class _OrderFooter extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final t = context.tokens;
-    final latest = latestEvent(order.timeline);
+    final latest = latestEvent(timeline);
     final style = theme.textTheme.labelSmall?.copyWith(color: t.textTertiary);
 
     return Padding(
@@ -312,12 +366,20 @@ class _OrderActionBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final cubit = context.read<OrderDetailCubit>();
     final busy = context.watch<OrderDetailCubit>().state.action.isSubmitting;
+    // The last action's error sits right above the buttons that caused it —
+    // unless the cancellation card is showing its own decision buttons, which
+    // then carry it.
+    final message = order.hasOpenCancelRequest && !order.isTraderView
+        ? null
+        : context.watch<OrderDetailCubit>().state.action.message;
 
     final actions = <_OrderAction>[
       for (final transition in order.allowedTransitions)
         _OrderAction(
           label: 'status.$transition'.tr(),
-          icon: _isDestructive(transition) ? Icons.block_rounded : Icons.check_circle_outline_rounded,
+          icon: _isDestructive(transition)
+              ? Icons.block_rounded
+              : Icons.check_circle_outline_rounded,
           destructive: _isDestructive(transition),
           run: () => _run(context, cubit, transition, order.requiresNote(transition)),
         ),
@@ -332,7 +394,11 @@ class _OrderActionBar extends StatelessWidget {
         ),
     ];
 
-    if (actions.isEmpty) return const SizedBox.shrink();
+    if (actions.isEmpty) {
+      return (message == null || message.isEmpty)
+          ? const SizedBox.shrink()
+          : AppBottomBar(child: FormMessage(message: message));
+    }
 
     final primaryIndex = actions.indexWhere((a) => !a.destructive);
     final primary = primaryIndex == -1 ? null : actions[primaryIndex];
@@ -379,7 +445,16 @@ class _OrderActionBar extends StatelessWidget {
       );
     }
 
-    return AppBottomBar(child: child);
+    return AppBottomBar(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FormMessage(message: message),
+          child,
+        ],
+      ),
+    );
   }
 
   void _showMore(BuildContext context, List<_OrderAction> actions) {
@@ -432,7 +507,35 @@ class _OrderActionBar extends StatelessWidget {
       );
       if (!ok) return;
     }
-    await cubit.changeStatus(transition, note: note);
+    // Transitions the server lists in `otp_required_for` (the supplier's
+    // acceptance) are a level-2 act: the code sheet posts them itself.
+    final order = cubit.state.order;
+    if (order != null && order.compliance.needsOtp(transition)) {
+      if (!context.mounted) return;
+      await showOtpAcceptance(
+        context,
+        documentType: order.compliance.otpDocumentType,
+        documentId: order.id,
+        title: 'status.$transition'.tr(),
+        subtitle: order.code,
+        submit: (code) => cubit.changeStatusWithOtp(transition, code, note: note),
+      );
+      return;
+    }
+    final ok = await cubit.changeStatus(transition, note: note);
+    if (ok || order == null || !context.mounted) return;
+    // The server asked for the binding code the payload had not announced:
+    // collect it rather than leave the user at an error they cannot act on.
+    if (PurchaseOrderCompliance.isCodeRequired(cubit.state.actionCode)) {
+      await showOtpAcceptance(
+        context,
+        documentType: order.compliance.otpDocumentType,
+        documentId: order.id,
+        title: 'status.$transition'.tr(),
+        subtitle: order.code,
+        submit: (code) => cubit.changeStatusWithOtp(transition, code, note: note),
+      );
+    }
   }
 
   Future<void> _requestCancel(BuildContext context, OrderDetailCubit cubit) async {
@@ -459,12 +562,14 @@ class _CancelRequestCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cubit = context.read<OrderDetailCubit>();
-    final busy = context.watch<OrderDetailCubit>().state.action.isSubmitting;
+    final action = context.watch<OrderDetailCubit>().state.action;
+    final busy = action.isSubmitting;
     // `viewer_role` decides, not the active workspace: a hybrid organization
     // can be the seller on this order and the buyer on the next one.
     final decides = !order.isTraderView;
-    final headline =
-        decides ? 'order.cancel_requested_supplier'.tr() : 'order.cancel_requested'.tr();
+    final headline = decides
+        ? 'order.cancel_requested_supplier'.tr()
+        : 'order.cancel_requested'.tr();
     final reason = order.cancelRequest?.reason ?? '';
 
     return AppBanner(
@@ -477,24 +582,31 @@ class _CancelRequestCard extends StatelessWidget {
           ? null
           : Padding(
               padding: const EdgeInsetsDirectional.only(top: AppTokens.space1),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Refusing keeps the order alive: the safe choice leads.
-                  Expanded(
-                    child: AppButton.outline(
-                      label: 'order.cancel_reject'.tr(),
-                      height: 44,
-                      onPressed: busy ? null : () => _reject(context, cubit),
-                    ),
-                  ),
-                  const SizedBox(width: AppTokens.space3),
-                  Expanded(
-                    child: AppButton.outlineDanger(
-                      label: 'order.cancel_accept'.tr(),
-                      height: 44,
-                      busy: busy,
-                      onPressed: busy ? null : () => _accept(context, cubit),
-                    ),
+                  // The decision's error, above the two buttons that settle it.
+                  FormMessage(message: action.message),
+                  Row(
+                    children: [
+                      // Refusing keeps the order alive: the safe choice leads.
+                      Expanded(
+                        child: AppButton.outline(
+                          label: 'order.cancel_reject'.tr(),
+                          height: 44,
+                          onPressed: busy ? null : () => _reject(context, cubit),
+                        ),
+                      ),
+                      const SizedBox(width: AppTokens.space3),
+                      Expanded(
+                        child: AppButton.outlineDanger(
+                          label: 'order.cancel_accept'.tr(),
+                          height: 44,
+                          busy: busy,
+                          onPressed: busy ? null : () => _accept(context, cubit),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

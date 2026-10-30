@@ -163,7 +163,9 @@ class _OutboundDetailBody extends StatelessWidget {
                 AppTokens.space8,
               ),
               children: [
-                FormMessage(message: state.action.message),
+                // With the action bar up, the message sits above its buttons
+                // instead; a cancelled note has no bar and keeps it here.
+                if (note.isCanceled) FormMessage(message: state.action.message),
 
                 AppCard(
                   child: Column(
@@ -401,6 +403,15 @@ class _SealsCardState extends State<_SealsCard> {
     if (ok && mounted) _controller.clear();
   }
 
+  /// `POST /seals` replaces the whole list (the add above relies on the same
+  /// semantics), so removing one posts the rest. The server requires at
+  /// least one seal, so the last one cannot be removed — only replaced.
+  Future<void> _remove(String seal) async {
+    final seals = [...widget.note.pickupSealNumbers]..remove(seal);
+    if (seals.isEmpty) return;
+    await context.read<DeliveryEditorCubit>().setSeals(seals);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -423,8 +434,8 @@ class _SealsCardState extends State<_SealsCard> {
               style: theme.textTheme.bodySmall?.copyWith(color: t.textTertiary),
             )
           else
-            // Seals are read-only chips: the cubit only replaces the whole
-            // list, it has no remove action.
+            // Removable while seals can still be set (before dispatch) and
+            // more than one remains — the server needs at least one.
             Wrap(
               spacing: AppTokens.space2,
               runSpacing: AppTokens.space2,
@@ -449,6 +460,18 @@ class _SealsCardState extends State<_SealsCard> {
                           textDirection: TextDirection.ltr,
                           style: AppType.code(t.textPrimary, size: 13),
                         ),
+                        if (widget.editable && widget.note.pickupSealNumbers.length > 1) ...[
+                          const SizedBox(width: AppTokens.space1),
+                          InkResponse(
+                            onTap: busy ? null : () => _remove(seal),
+                            radius: 18,
+                            child: Semantics(
+                              button: true,
+                              label: 'common.clear'.tr(),
+                              child: Icon(Icons.close_rounded, size: 16, color: t.textSecondary),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -500,7 +523,8 @@ class _OutboundActionBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cubit = context.read<DeliveryEditorCubit>();
-    final busy = context.watch<DeliveryEditorCubit>().state.action.isSubmitting;
+    final action = context.watch<DeliveryEditorCubit>().state.action;
+    final busy = action.isSubmitting;
     final beforeDispatch = note.dispatchedAt == null;
     final canMarkDelivered = !beforeDispatch && !note.isDelivered;
 
@@ -528,15 +552,23 @@ class _OutboundActionBar extends StatelessWidget {
             : null;
 
     return AppBottomBar(
-      child: primary == null
-          ? more
-          : Row(
-              children: [
-                Expanded(flex: 2, child: primary),
-                const SizedBox(width: AppTokens.space3),
-                Expanded(child: more),
-              ],
-            ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // The last action's error, right above the buttons.
+          FormMessage(message: action.message),
+          primary == null
+              ? more
+              : Row(
+                  children: [
+                    Expanded(flex: 2, child: primary),
+                    const SizedBox(width: AppTokens.space3),
+                    Expanded(child: more),
+                  ],
+                ),
+        ],
+      ),
     );
   }
 

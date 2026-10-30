@@ -4,6 +4,7 @@ import '../../core/network/coerce.dart';
 import '../../core/network/paged.dart';
 import '../../core/workspace/workspace.dart';
 import '../api_paths.dart';
+import '../models/trade/document_flow.dart';
 import '../models/trade/purchase_order.dart';
 
 /// Drafts and purchase orders.
@@ -84,9 +85,14 @@ class OrdersRepository {
 
   /// **Never auto-retried.** A submit that times out may have succeeded; the
   /// user re-checks the order list rather than sending a second one.
-  Future<ApiResult<PurchaseOrder>> submitDraft(int draftId) => _client.post<PurchaseOrder>(
+  ///
+  /// Answers the order and its `credit_review`. A refusal is a `422` whose
+  /// body carries `errors[]` (contract rules, delivery branch, order
+  /// minimum) — read them with [SubmitRuleError.listFrom] on `details`.
+  Future<ApiResult<DraftSubmitResult>> submitDraft(int draftId) =>
+      _client.post<DraftSubmitResult>(
         ApiPaths.purchaseDraftSubmit(draftId),
-        parse: (body) => PurchaseOrder.fromJson(asMap(asMap(body)['purchase_order'])),
+        parse: (body) => DraftSubmitResult.fromJson(asMap(body)),
       );
 
   // ------------------------------------------------------------------ orders
@@ -130,10 +136,13 @@ class OrdersRepository {
     required int id,
     required String status,
     String? note,
+    String? otpCode,
   }) =>
       _client.patch<PurchaseOrder>(
         ApiPaths.purchaseOrderStatus(id),
-        body: {'status': status, 'note': ?note},
+        // `otp_code` for the transitions in `otp_required_for` (supplier
+        // acceptance, document type `purchase_order`).
+        body: {'status': status, 'note': ?note, 'otp_code': ?otpCode},
         parse: (body) => PurchaseOrder.fromJson(asMap(asMap(body)['purchase_order'])),
       );
 
@@ -162,5 +171,13 @@ class OrdersRepository {
           final map = asMap(body);
           return asList(map['timeline'] ?? map['events'] ?? body, TimelineEvent.fromJson);
         },
+      );
+
+  /// The chain around a document — PO → shipments → receipts → invoices →
+  /// payments. Read-only and optional: a failure just hides the strip.
+  Future<ApiResult<DocumentFlow>> documentFlow(String entityType, int entityId) =>
+      _client.get<DocumentFlow>(
+        ApiPaths.documentFlow(entityType, entityId),
+        parse: (body) => DocumentFlow.fromJson(asMap(body)),
       );
 }

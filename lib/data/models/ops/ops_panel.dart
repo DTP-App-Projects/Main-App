@@ -37,7 +37,7 @@ class OpsPanel {
       kpis: KpiTile.listFrom(json['kpis']),
       attention: asList(json['attention'], AttentionItem.fromJson),
       quickActions: asList(json['quick_actions'], QuickAction.fromJson),
-      documentGroups: asList(json['document_groups'], DocumentGroup.fromJson),
+      documentGroups: DocumentGroup.listFrom(json['document_groups']),
       generatedAt: asDate(json['generated_at']),
     );
   }
@@ -172,5 +172,31 @@ class DocumentGroup {
         count: asInt(j['count']),
       );
 
+  /// The server's own label; empty for the keyed shape, which sends none —
+  /// the screen names those groups from [key].
   String label(String locale) => pickLocalized(locale: locale, ar: labelAr, en: labelEn);
+
+  /// `document_groups` arrives in two shapes:
+  /// - a list of `{key, label_ar, label_en, items, count}` (the documented one);
+  /// - a map of group key → document rows, which is what `/ops/panel` and
+  ///   `/ops/documents` send live (seen 2026-10-05:
+  ///   `{purchase_orders: [...], invoices: [...], contracts: [...]}`).
+  ///   The rows' own `title` is English whatever the locale, so only the key
+  ///   and the row count are taken.
+  static List<DocumentGroup> listFrom(dynamic raw) {
+    if (raw is List) return asList(raw, DocumentGroup.fromJson);
+    if (raw is! Map) return const [];
+    return [
+      for (final entry in raw.entries)
+        if (entry.value is List)
+          DocumentGroup(
+            key: '${entry.key}',
+            labelAr: '',
+            labelEn: '',
+            icon: '',
+            items: const [],
+            count: (entry.value as List).length,
+          ),
+    ];
+  }
 }

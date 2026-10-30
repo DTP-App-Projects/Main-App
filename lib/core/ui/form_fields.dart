@@ -1,5 +1,6 @@
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../utils/theme/tokens.dart';
 import 'app_buttons.dart';
@@ -99,6 +100,9 @@ class AppField extends StatefulWidget {
   /// Forces a direction — IBANs, emails, codes read LTR in Arabic too.
   final TextDirection? textDirection;
 
+  /// Shapes the text as it is typed (e.g. [SaudiPhone.formatters]).
+  final List<TextInputFormatter>? inputFormatters;
+
   const AppField({
     super.key,
     required this.controller,
@@ -120,6 +124,7 @@ class AppField extends StatefulWidget {
     this.hint,
     this.suffixText,
     this.textDirection,
+    this.inputFormatters,
   });
 
   @override
@@ -136,6 +141,17 @@ class _AppFieldState extends State<AppField> {
     final t = context.tokens;
     final hasError = widget.serverError != null;
 
+    // A multi-line field needs the multi-line keyboard: Flutter asserts on
+    // `TextInputAction.newline` with the single-line `text` keyboard. A
+    // caller that left both at their defaults gets Enter = new line.
+    final multiline = !obscured && widget.maxLines > 1;
+    final keyboardType = multiline && widget.keyboardType == TextInputType.text
+        ? TextInputType.multiline
+        : widget.keyboardType;
+    final textInputAction = multiline && widget.textInputAction == TextInputAction.next
+        ? TextInputAction.newline
+        : widget.textInputAction;
+
     return AppFieldShell(
       label: widget.label,
       required: widget.required,
@@ -143,12 +159,13 @@ class _AppFieldState extends State<AppField> {
         controller: widget.controller,
         obscureText: obscured,
         enabled: widget.enabled,
-        keyboardType: widget.keyboardType,
-        textInputAction: widget.textInputAction,
+        keyboardType: keyboardType,
+        textInputAction: textInputAction,
         maxLength: widget.maxLength,
         maxLines: obscured ? 1 : widget.maxLines,
         minLines: widget.maxLines > 1 ? widget.maxLines.clamp(1, 3) : null,
         validator: widget.validator,
+        inputFormatters: widget.inputFormatters,
         autofillHints: widget.enabled ? widget.autofillHints : null,
         onChanged: widget.onChanged,
         textDirection: widget.textDirection,
@@ -194,9 +211,15 @@ class AppUnitSuffix extends StatelessWidget {
       );
 }
 
-InputDecoration _pickerDecoration(String? error, {String? hint}) => InputDecoration(
-      errorText: error,
-      hintText: hint ?? 'lookup.choose'.tr(),
+InputDecoration _pickerDecoration(String? error) => InputDecoration(errorText: error);
+
+/// The empty-picker placeholder. Passed as the dropdown's own `hint` — a
+/// decoration `hintText` rendered in the dropdown's value style, which made
+/// an empty picker look like a chosen value (found in device QA).
+Widget _pickerHint(BuildContext context) => Text(
+      'lookup.choose'.tr(),
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: context.tokens.textTertiary),
     );
 
 /// A dropdown over anything with an int id.
@@ -241,6 +264,8 @@ class IdPicker<T> extends StatelessWidget {
         dropdownColor: t.surfaceRaised,
         borderRadius: AppTokens.mdRadius,
         decoration: _pickerDecoration(error),
+        hint: _pickerHint(context),
+        disabledHint: _pickerHint(context),
         items: items
             .map((item) => DropdownMenuItem(
                   value: idOf(item),
@@ -291,6 +316,8 @@ class CodePicker extends StatelessWidget {
         dropdownColor: t.surfaceRaised,
         borderRadius: AppTokens.mdRadius,
         decoration: _pickerDecoration(error),
+        hint: _pickerHint(context),
+        disabledHint: _pickerHint(context),
         items: codes
             .map((code) => DropdownMenuItem(
                   value: code,
@@ -358,5 +385,57 @@ class AppValidators {
   static String? password(String? value) {
     if (value == null || value.isEmpty) return 'validation.required'.tr();
     return value.length < 6 ? 'validation.password_min'.tr() : null;
+  }
+
+  /// A **new** account's password: «استخدم 8 أحرف على الأقل» (guide 1).
+  static String? newPassword(String? value) {
+    if (value == null || value.isEmpty) return 'validation.required'.tr();
+    return value.length < 8 ? 'validation.password_min8'.tr() : null;
+  }
+}
+
+/// Saudi mobile numbers, enforced while typing: the field can only ever
+/// hold a prefix of `05XXXXXXXX` — a `0`, then a `5`, then up to eight more
+/// digits. Keystrokes that would break that are ignored, so there is nothing
+/// left for a validator to catch.
+///
+/// Typing stays forgiving: non-digits are dropped, a pasted international
+/// form (`+966 5…`, `00966 5…`, `966 5…`) becomes `05…`, and a number started
+/// without the leading zero (`5…`) gets it.
+class SaudiPhone {
+  SaudiPhone._();
+
+  static const hint = '05XXXXXXXX';
+
+  static List<TextInputFormatter> get formatters => [_SaudiPhoneFormatter()];
+
+  /// `+966 50 123 4567` → `0501234567`. Digits only, at most ten.
+  static String normalize(String raw) {
+    var digits = raw.replaceAll(RegExp(r'\D'), '');
+    if (digits.startsWith('00966')) {
+      digits = '0${digits.substring(5)}';
+    } else if (digits.startsWith('966')) {
+      digits = '0${digits.substring(3)}';
+    } else if (digits.startsWith('5')) {
+      digits = '0$digits';
+    }
+    return digits.length > 10 ? digits.substring(0, 10) : digits;
+  }
+
+  /// Whether [text] can still grow into a Saudi mobile number: empty, `0`, or
+  /// `05` followed by digits.
+  static bool isAllowedPrefix(String text) => text.isEmpty || text == '0' || text.startsWith('05');
+}
+
+class _SaudiPhoneFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final text = SaudiPhone.normalize(newValue.text);
+    // A keystroke that cannot lead to 05XXXXXXXX is refused outright.
+    if (!SaudiPhone.isAllowedPrefix(text)) return oldValue;
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
   }
 }

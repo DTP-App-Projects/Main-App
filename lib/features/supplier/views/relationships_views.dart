@@ -3,27 +3,36 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../shared/compliance/compliance_widgets.dart';
+import '../../shared/compliance/views/relationship_supply_panel.dart';
 import '../../../core/ui/ui.dart';
 import '../../../core/utils/roots/app_router.dart';
 import '../../../core/utils/services/remote_services/service_locator.dart';
+import '../../../core/workspace/workspace.dart';
 import '../../../data/models/trade/pricing.dart';
 import '../../../data/models/trade/supplier_summary.dart';
 import '../../../data/repositories/supplier_repository.dart';
 import '../view_models/supplier_cubits.dart';
 
-/// Who the supplier trades with, and on what terms.
+/// Who this organization trades with, and on what terms — «العلاقات
+/// التجارية» for both sides (guide Part 6.4). The supplier side adds its
+/// own controls (suspend, credit); the trader side opens the supplier.
 class RelationshipsView extends StatelessWidget {
-  const RelationshipsView({super.key});
+  final Workspace side;
+
+  const RelationshipsView({super.key, this.side = Workspace.supplier});
 
   @override
   Widget build(BuildContext context) => BlocProvider(
         create: (_) => RelationshipsCubit(getIt<SupplierRepository>())..load(),
-        child: const _RelationshipsBody(),
+        child: _RelationshipsBody(side: side),
       );
 }
 
 class _RelationshipsBody extends StatelessWidget {
-  const _RelationshipsBody();
+  final Workspace side;
+
+  const _RelationshipsBody({required this.side});
 
   @override
   Widget build(BuildContext context) {
@@ -55,7 +64,7 @@ class _RelationshipsBody extends StatelessWidget {
               onLoadMore: cubit.loadMore,
               emptyIcon: Icons.handshake_outlined,
               emptyTitle: 'relationship.empty'.tr(),
-              itemBuilder: (relationship) => _RelationshipCard(relationship: relationship),
+              itemBuilder: (relationship) => _RelationshipCard(relationship: relationship, side: side),
             ),
           ),
         ],
@@ -66,8 +75,11 @@ class _RelationshipsBody extends StatelessWidget {
 
 class _RelationshipCard extends StatelessWidget {
   final BusinessRelationship relationship;
+  final Workspace side;
 
-  const _RelationshipCard({required this.relationship});
+  const _RelationshipCard({required this.relationship, required this.side});
+
+  bool get _isSupplier => side == Workspace.supplier;
 
   @override
   Widget build(BuildContext context) {
@@ -94,6 +106,13 @@ class _RelationshipCard extends StatelessWidget {
               StatusChip(status: relationship.status),
             ],
           ),
+          if (!relationship.isSupplyActive) ...[
+            const SizedBox(height: AppTokens.space2),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: SupplyStatusPill(status: relationship.supplyStatus),
+            ),
+          ],
           const SizedBox(height: AppTokens.space3),
           Wrap(
             spacing: AppTokens.space2,
@@ -117,28 +136,44 @@ class _RelationshipCard extends StatelessWidget {
           Wrap(
             spacing: AppTokens.space1,
             children: [
-              if (!relationship.isApproved)
+              // A pending relationship is accepted on its request, by the
+              // signatory, with a verification code (guide Part 6.3) — never
+              // by a plain "Approve" here, which set it approved with neither.
+              if (relationship.status == 'pending_review')
                 AppButton.text(
-                  label: 'relationship.approve'.tr(),
-                  icon: Icons.check_circle_outline_rounded,
-                  onPressed: () => _confirmApprove(context, cubit),
+                  label: 'relationship.review_request'.tr(),
+                  icon: Icons.fact_check_outlined,
+                  onPressed: () => context.push(AppRoutes.relationshipRequests),
                 )
-              else
+              else if (_isSupplier && relationship.status == 'suspended')
+                AppButton.text(
+                  label: 'relationship.reactivate'.tr(),
+                  icon: Icons.play_circle_outline_rounded,
+                  onPressed: () => _confirmReactivate(context, cubit),
+                )
+              else if (_isSupplier && relationship.isApproved)
                 _DangerTextButton(
                   label: 'relationship.suspend'.tr(),
                   icon: Icons.pause_circle_outline_rounded,
                   onPressed: () => _confirmSuspend(context, cubit),
+                ),
+              if (!_isSupplier && relationship.counterparty != null)
+                AppButton.text(
+                  label: 'relationship.open_supplier'.tr(),
+                  icon: Icons.storefront_outlined,
+                  onPressed: () => context.push(AppRoutes.supplierDetailFor(relationship.counterparty!.id)),
                 ),
               AppButton.text(
                 label: 'rating.title'.tr(),
                 icon: Icons.star_border_rounded,
                 onPressed: () => context.push(AppRoutes.ratingsFor(relationship.id)),
               ),
-              AppButton.text(
-                label: 'credit.title'.tr(),
-                icon: Icons.credit_score_outlined,
-                onPressed: () => context.push(AppRoutes.creditFor(relationship.id)),
-              ),
+              if (_isSupplier)
+                AppButton.text(
+                  label: 'credit.title'.tr(),
+                  icon: Icons.credit_score_outlined,
+                  onPressed: () => context.push(AppRoutes.creditFor(relationship.id)),
+                ),
             ],
           ),
         ],
@@ -146,12 +181,14 @@ class _RelationshipCard extends StatelessWidget {
     );
   }
 
-  Future<void> _confirmApprove(BuildContext context, RelationshipsCubit cubit) async {
+  /// Lifting a suspension the supplier itself applied — not the acceptance
+  /// of a request, which only the signatory's code can give.
+  Future<void> _confirmReactivate(BuildContext context, RelationshipsCubit cubit) async {
     final confirmed = await showAppConfirm(
       context,
-      title: 'relationship.approve'.tr(),
+      title: 'relationship.reactivate'.tr(),
       body: relationship.counterparty?.name,
-      confirmLabel: 'relationship.approve'.tr(),
+      confirmLabel: 'relationship.reactivate'.tr(),
     );
     if (!confirmed) return;
     await cubit.setRelationshipStatus(id: relationship.id, value: 'approved');
@@ -265,6 +302,8 @@ class _CreditBodyState extends State<_CreditBody> {
       bottomNavigationBar: !showForm
           ? null
           : AppBottomBar(
+              // The save's error sits right above the save button.
+              leading: (state.action.message ?? '').isEmpty ? null : FormMessage(message: state.action.message),
               child: SubmitButton(
                 busy: state.action.isSubmitting,
                 label: 'common.save'.tr(),
@@ -309,7 +348,8 @@ class _CreditBodyState extends State<_CreditBody> {
               AppTokens.space8,
             ),
             children: [
-              FormMessage(message: state.action.message),
+              // Supply status (late-payment path), restore, dispute pack.
+              RelationshipSupplyPanel(relationshipId: context.read<CreditCubit>().relationshipId),
 
               if (exposure != null) ...[
                 AppSectionLabel(

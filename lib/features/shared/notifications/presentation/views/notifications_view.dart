@@ -28,10 +28,10 @@ class _NotificationsViewState extends State<NotificationsView> {
   void initState() {
     super.initState();
     _controller.addListener(_onScroll);
-    // The cubit is session-scoped for the badge, so the list may already be
-    // loaded when this opens; only a cold one is fetched.
-    final cubit = context.read<NotificationsCubit>();
-    if (cubit.state.items.isEmpty) cubit.load();
+    // The cubit is session-scoped for the badge, so the list may already
+    // hold rows from earlier — re-read them behind the old ones, or a list
+    // of one or two never showed what arrived since.
+    context.read<NotificationsCubit>().refresh(quiet: true);
   }
 
   @override
@@ -53,12 +53,14 @@ class _NotificationsViewState extends State<NotificationsView> {
     await cubit.markRead(notification);
     if (!mounted) return;
 
-    await getIt<DeepLinkRouter>().open(DeepLink(
-      clickAction: notification.clickAction,
-      entityType: notification.entityType,
-      entityId: notification.entityId,
-      eventCode: notification.eventCode,
-    ));
+    await getIt<DeepLinkRouter>().open(
+      DeepLink(
+        clickAction: notification.clickAction,
+        entityType: notification.entityType,
+        entityId: notification.entityId,
+        eventCode: notification.eventCode,
+      ),
+    );
   }
 
   @override
@@ -148,7 +150,9 @@ class _NotificationsViewState extends State<NotificationsView> {
     final actions = [
       AppCircleButton(
         size: 40,
-        tooltip: state.unreadOnly ? 'notifications.show_all'.tr() : 'notifications.show_unread'.tr(),
+        tooltip: state.unreadOnly
+            ? 'notifications.show_all'.tr()
+            : 'notifications.show_unread'.tr(),
         icon: state.unreadOnly ? Icons.filter_alt_rounded : Icons.filter_alt_outlined,
         onPressed: cubit.toggleUnreadOnly,
       ),
@@ -167,8 +171,9 @@ class _NotificationsViewState extends State<NotificationsView> {
           current.errorMessage != null &&
           current.errorMessage != previous.errorMessage &&
           current.items.isNotEmpty,
-      listener: (context, current) => ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(current.errorMessage!))),
+      listener: (context, current) => ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(current.errorMessage!))),
       child: body,
     );
 
@@ -213,7 +218,9 @@ class _NotificationsViewState extends State<NotificationsView> {
     final rows = <Object>[];
     String? current;
     for (final item in items) {
-      final label = isToday(item.createdAt) ? 'notifications.today'.tr() : 'notifications.earlier'.tr();
+      final label = isToday(item.createdAt)
+          ? 'notifications.today'.tr()
+          : 'notifications.earlier'.tr();
       if (label != current) {
         rows.add(label);
         current = label;
@@ -229,11 +236,7 @@ class _NotificationTile extends StatelessWidget {
   final String locale;
   final VoidCallback onTap;
 
-  const _NotificationTile({
-    required this.notification,
-    required this.locale,
-    required this.onTap,
-  });
+  const _NotificationTile({required this.notification, required this.locale, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -297,13 +300,13 @@ class _NotificationTile extends StatelessWidget {
   }
 
   static IconData _iconFor(String clickAction) => switch (clickAction) {
-        'purchase_order' => Icons.receipt_long_outlined,
-        'delivery_note' => Icons.local_shipping_outlined,
-        'goods_receipt' => Icons.inventory_2_outlined,
-        'invoice' => Icons.request_quote_outlined,
-        'post_invoice_return' => Icons.assignment_return_outlined,
-        'supplier_fleet_contract' => Icons.handshake_outlined,
-        'chat' => Icons.chat_bubble_outline_rounded,
-        _ => Icons.notifications_none_rounded,
-      };
+    'purchase_order' => Icons.receipt_long_outlined,
+    'delivery_note' => Icons.local_shipping_outlined,
+    'goods_receipt' => Icons.inventory_2_outlined,
+    'invoice' => Icons.request_quote_outlined,
+    'post_invoice_return' => Icons.assignment_return_outlined,
+    'supplier_fleet_contract' => Icons.handshake_outlined,
+    'chat' => Icons.chat_bubble_outline_rounded,
+    _ => Icons.notifications_none_rounded,
+  };
 }

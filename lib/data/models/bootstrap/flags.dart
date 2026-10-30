@@ -34,6 +34,13 @@ extension PlatformFlagX on Flags {
   bool get applePayEnabled => isEnabled('apple_pay_enabled');
   bool get bankTransferEnabled => isEnabled('bank_transfer_enabled');
   bool get creditModuleEnabled => isEnabled('credit_module_enabled');
+
+  /// Owner switches from the compliance release (`b2b_compliance.*`). Both
+  /// default to **off** per spec §13; the server does not publish them yet,
+  /// so an absent key means off and the entry points stay hidden. Should the
+  /// owner switch one back on and the flag appear, the UI returns by itself.
+  bool get walletEnabled => isEnabled('wallet_enabled');
+  bool get consumerCheckoutEnabled => isEnabled('consumer_checkout_enabled');
 }
 
 /// `GET /v2/platform/flags` answers `{flags, defaults}` — the live server

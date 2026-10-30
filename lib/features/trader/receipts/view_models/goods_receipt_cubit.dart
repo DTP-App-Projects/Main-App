@@ -15,12 +15,30 @@ class ReceiptLineDraft {
   final double rejectedQty;
   final String rejectionReason;
 
+  /// Of the not-accepted quantity, how much is defective; the rest is a
+  /// shortage (guide Part 11.1).
+  final double defectQty;
+  final String defectNote;
+
   const ReceiptLineDraft({
     required this.line,
     required this.receivedQty,
     this.rejectedQty = 0,
     this.rejectionReason = '',
+    this.defectQty = 0,
+    this.defectNote = '',
   });
+
+  double get shortageQty {
+    final shortage = rejectedQty - defectQty;
+    return shortage < 0 ? 0 : shortage;
+  }
+
+  /// «سجّل ملاحظة العيب للكمية المعيبة».
+  bool get needsDefectNote => defectQty > 0 && defectNote.trim().isEmpty;
+
+  /// Defective cannot exceed what was not accepted.
+  bool get defectTooHigh => defectQty > rejectedQty + 1e-6;
 
   /// The driver handed over `shipped_qty`; anything the trader does not
   /// account for is what produces `qty_mismatch_with_driver`.
@@ -31,16 +49,22 @@ class ReceiptLineDraft {
   /// A rejection with no reason is the thing a supplier will dispute back.
   bool get needsReason => rejectedQty > 0 && rejectionReason.trim().isEmpty;
 
+  bool get isIncomplete => needsReason || needsDefectNote || defectTooHigh;
+
   ReceiptLineDraft copyWith({
     double? receivedQty,
     double? rejectedQty,
     String? rejectionReason,
+    double? defectQty,
+    String? defectNote,
   }) =>
       ReceiptLineDraft(
         line: line,
         receivedQty: receivedQty ?? this.receivedQty,
         rejectedQty: rejectedQty ?? this.rejectedQty,
         rejectionReason: rejectionReason ?? this.rejectionReason,
+        defectQty: defectQty ?? this.defectQty,
+        defectNote: defectNote ?? this.defectNote,
       );
 }
 
@@ -55,6 +79,9 @@ class GoodsReceiptState {
   final String? proofPath;
   final String notes;
 
+  /// «اسم المستلم لدى التاجر».
+  final String receiverName;
+
   final SubmitState action;
 
   /// Set once the receipt exists, which is when disputing becomes possible.
@@ -68,12 +95,16 @@ class GoodsReceiptState {
     this.lines = const [],
     this.proofPath,
     this.notes = '',
+    this.receiverName = '',
     this.action = const SubmitState(),
     this.created,
   });
 
   bool get hasMismatch => lines.any((line) => !line.balances);
-  bool get missingReason => lines.any((line) => line.needsReason);
+
+  /// Anything that blocks the submit: a line's missing reason or defect
+  /// note, or the receiver's name.
+  bool get missingReason => lines.any((line) => line.isIncomplete) || receiverName.trim().isEmpty;
 
   GoodsReceiptState copyWith({
     bool? loading,
@@ -83,12 +114,14 @@ class GoodsReceiptState {
     List<ReceiptLineDraft>? lines,
     String? proofPath,
     String? notes,
+    String? receiverName,
     SubmitState? action,
     GoodsReceipt? created,
     bool clearError = false,
     bool clearProof = false,
   }) =>
       GoodsReceiptState(
+        receiverName: receiverName ?? this.receiverName,
         loading: loading ?? this.loading,
         note: note ?? this.note,
         errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
@@ -135,7 +168,14 @@ class GoodsReceiptCubit extends Cubit<GoodsReceiptState> {
     ));
   }
 
-  void updateLine(int lineId, {double? received, double? rejected, String? reason}) {
+  void updateLine(
+    int lineId, {
+    double? received,
+    double? rejected,
+    String? reason,
+    double? defect,
+    String? defectNote,
+  }) {
     emit(state.copyWith(
       lines: [
         for (final draft in state.lines)
@@ -144,11 +184,15 @@ class GoodsReceiptCubit extends Cubit<GoodsReceiptState> {
                   receivedQty: received,
                   rejectedQty: rejected,
                   rejectionReason: reason,
+                  defectQty: defect,
+                  defectNote: defectNote,
                 )
               : draft,
       ],
     ));
   }
+
+  void setReceiverName(String value) => emit(state.copyWith(receiverName: value));
 
   void setProof(String? path) =>
       emit(path == null ? state.copyWith(clearProof: true) : state.copyWith(proofPath: path));
@@ -165,6 +209,7 @@ class GoodsReceiptCubit extends Cubit<GoodsReceiptState> {
       deliveryNoteId: deliveryNoteId,
       proofFile: state.proofPath,
       notes: state.notes.trim().isEmpty ? null : state.notes.trim(),
+      receiverName: state.receiverName.trim().isEmpty ? null : state.receiverName.trim(),
       lines: [
         for (final draft in state.lines)
           GoodsReceiptLineInput(
@@ -174,6 +219,9 @@ class GoodsReceiptCubit extends Cubit<GoodsReceiptState> {
             rejectedQty: draft.rejectedQty,
             rejectionReason:
                 draft.rejectionReason.trim().isEmpty ? null : draft.rejectionReason.trim(),
+            shortageQty: draft.shortageQty,
+            defectQty: draft.defectQty,
+            defectNote: draft.defectNote.trim().isEmpty ? null : draft.defectNote.trim(),
           ),
       ],
     );

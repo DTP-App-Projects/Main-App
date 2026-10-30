@@ -63,15 +63,19 @@ class _WorkspaceSheet extends StatelessWidget {
             child: AppCard.item(
               margin: EdgeInsetsDirectional.zero,
               borderColor: workspace == state.active ? t.primary : null,
-              onTap: () {
-                Navigator.of(context).pop();
-                // Switching does not log out and does not re-fetch bootstrap —
-                // the router moves to the other workspace's home and the shell
-                // key rebuilds everything scoped to it.
-                if (workspace != state.active) {
-                  context.read<WorkspaceCubit>().switchTo(workspace);
-                }
-              },
+              // «بعد اعتماد الاثنين يظهر مبدّل المساحة» (guide Part 3): a
+              // profile still in review cannot be worked in yet.
+              onTap: workspace != state.active && !state.approvedWorkspaces.contains(workspace.api)
+                  ? null
+                  : () {
+                      Navigator.of(context).pop();
+                      // Switching does not log out and does not re-fetch bootstrap —
+                      // the router moves to the other workspace's home and the shell
+                      // key rebuilds everything scoped to it.
+                      if (workspace != state.active) {
+                        context.read<WorkspaceCubit>().switchTo(workspace);
+                      }
+                    },
               child: Row(
                 children: [
                   AppIconCircle(

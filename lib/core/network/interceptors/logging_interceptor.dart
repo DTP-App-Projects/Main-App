@@ -4,6 +4,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 /// Debug-only request/response log with the secrets taken out.
+///
+/// Every response is printed in full, pretty-printed, one line at a time:
+/// Android's logcat cuts a single line at ~1000 characters, so one long
+/// `debugPrint` of a big body arrives chopped.
 class LoggingInterceptor extends Interceptor {
   static const _redacted = <String>{
     'password',
@@ -18,13 +22,20 @@ class LoggingInterceptor extends Interceptor {
     'authorization',
   };
 
+  /// Well under logcat's per-line limit.
+  static const _chunk = 800;
+
+  static const _startedAt = 'log_started_at';
+
+  static const _pretty = JsonEncoder.withIndent('  ');
+
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     if (kDebugMode) {
-      debugPrint('→ ${options.method} ${options.uri}');
-      final headers = _scrub(Map<String, dynamic>.from(options.headers));
-      debugPrint('  headers: $headers');
-      if (options.data != null) debugPrint('  body: ${_body(options.data)}');
+      options.extra[_startedAt] = DateTime.now().millisecondsSinceEpoch;
+      _print('→ ${options.method} ${options.uri}');
+      _print('  headers: ${jsonEncode(_scrub(Map<String, dynamic>.from(options.headers)))}');
+      if (options.data != null) _print('  body: ${_body(options.data)}');
     }
     handler.next(options);
   }
@@ -32,8 +43,9 @@ class LoggingInterceptor extends Interceptor {
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
     if (kDebugMode) {
-      debugPrint('← ${response.statusCode} ${response.requestOptions.uri}');
-      debugPrint('  ${_body(response.data)}');
+      final options = response.requestOptions;
+      _print('← ${response.statusCode} ${options.method} ${options.uri}${_took(options)}');
+      _print(_body(response.data));
     }
     handler.next(response);
   }
@@ -41,30 +53,67 @@ class LoggingInterceptor extends Interceptor {
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
     if (kDebugMode) {
-      debugPrint('✖ ${err.type} ${err.requestOptions.uri}');
+      final options = err.requestOptions;
+      final status = err.response?.statusCode;
+      _print('✖ ${status ?? err.type.name} ${options.method} ${options.uri}${_took(options)}');
       if (err.response != null) {
-        debugPrint('  ${err.response?.statusCode} ${_body(err.response?.data)}');
+        _print(_body(err.response?.data));
+      } else if (err.message != null) {
+        _print('  ${err.message}');
       }
     }
     handler.next(err);
   }
 
+  String _took(RequestOptions options) {
+    final started = options.extra[_startedAt];
+    if (started is! int) return '';
+    return ' (${DateTime.now().millisecondsSinceEpoch - started} ms)';
+  }
+
   String _body(dynamic data) {
+    if (data == null) return '<empty>';
     if (data is FormData) {
       final fields = _scrub({for (final f in data.fields) f.key: f.value});
       final files = data.files.map((f) => '${f.key}=<file ${f.value.filename}>').join(', ');
-      return '$fields${files.isEmpty ? '' : ' $files'}';
+      return '${jsonEncode(fields)}${files.isEmpty ? '' : ' $files'}';
     }
-    if (data is Map) return jsonEncode(_scrub(data.cast<String, dynamic>()));
-    final raw = '$data';
-    return raw.length > 2000 ? '${raw.substring(0, 2000)}…' : raw;
+    if (data is Map || data is List) return _pretty.convert(_scrubAny(data));
+    if (data is String) {
+      // A JSON body dio did not decode (wrong content type) — still pretty.
+      try {
+        return _pretty.convert(_scrubAny(jsonDecode(data)));
+      } catch (_) {
+        return data;
+      }
+    }
+    if (data is List<int>) return '<${data.length} bytes>';
+    return '$data';
+  }
+
+  /// Line by line, long lines in chunks, so nothing is lost.
+  void _print(String text) {
+    for (final line in const LineSplitter().convert(text)) {
+      if (line.length <= _chunk) {
+        debugPrint(line);
+        continue;
+      }
+      for (var i = 0; i < line.length; i += _chunk) {
+        debugPrint(line.substring(i, i + _chunk > line.length ? line.length : i + _chunk));
+      }
+    }
+  }
+
+  dynamic _scrubAny(dynamic value) {
+    if (value is Map) return _scrub(value.cast<String, dynamic>());
+    if (value is List) return value.map(_scrubAny).toList();
+    return value;
   }
 
   Map<String, dynamic> _scrub(Map<String, dynamic> input) {
     return input.map((k, v) {
       if (_redacted.contains(k.toLowerCase())) return MapEntry(k, '***');
-      if (v is Map) return MapEntry(k, _scrub(v.cast<String, dynamic>()));
-      return MapEntry(k, v);
+      return MapEntry(k, _scrubAny(v));
     });
   }
 }

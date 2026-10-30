@@ -1,5 +1,6 @@
 import '../../../core/network/coerce.dart';
 import '../../../core/workspace/workspace.dart';
+import '../compliance/trade_compliance.dart';
 import 'supplier_summary.dart';
 
 /// A draft is the trader's private basket. It becomes a purchase order on
@@ -142,7 +143,11 @@ class PurchaseOrder {
   final List<TimelineEvent> timeline;
   final List<PurchaseOrderLine> lines;
 
+  /// Chain FA → quotation → PO → ACK, supply model, OTP-gated transitions.
+  final PurchaseOrderCompliance compliance;
+
   const PurchaseOrder({
+    this.compliance = PurchaseOrderCompliance.empty,
     required this.id,
     required this.code,
     required this.status,
@@ -212,11 +217,19 @@ class PurchaseOrder {
             : null,
         timeline: asList(j['timeline'], TimelineEvent.fromJson),
         lines: asList(j['lines'], PurchaseOrderLine.fromJson),
+        compliance: PurchaseOrderCompliance.fromJson(j),
       );
 
   Workspace? get viewerWorkspace => Workspace.tryParse(viewerRole);
 
   bool get isTraderView => viewerRole == 'trader';
+
+  /// The supplier may issue a delivery note (guide Part 10.1): the order is
+  /// accepted and some quantity is still open.
+  bool get canShip {
+    const shippable = {'approved', 'accepted', 'ready', 'partially_delivered', 'partial'};
+    return shippable.contains(status) && lines.any((line) => line.qty - line.shippedQty > 0);
+  }
 
   /// The server says a note is mandatory for these transitions — 3 to 500
   /// characters, else `400 reason_required`.
@@ -304,9 +317,18 @@ class CancelRequest {
 class TimelineEvent {
   final String event;
   final String title;
+
+  /// The server's own titles in both languages (`title_ar` / `title_en`) —
+  /// what the order timeline actually sends; [title] is the older single key.
+  final String titleAr;
+  final String titleEn;
   final String description;
   final String status;
   final String actorName;
+
+  /// The approval step or document the entry is about: `credit_check`,
+  /// `supplier_review`, or a document number (`PO-…`, `DN-…`).
+  final String ref;
   final DateTime? at;
 
   const TimelineEvent({
@@ -316,16 +338,29 @@ class TimelineEvent {
     required this.status,
     required this.actorName,
     required this.at,
+    this.titleAr = '',
+    this.titleEn = '',
+    this.ref = '',
   });
 
   factory TimelineEvent.fromJson(Map<String, dynamic> j) => TimelineEvent(
         event: asStr(j['event'] ?? j['event_code'] ?? j['type']),
         title: unwrap(j['title'] ?? j['label']),
+        titleAr: unwrap(j['title_ar']),
+        titleEn: unwrap(j['title_en']),
         description: unwrap(j['description'] ?? j['text'] ?? j['note']),
         status: asStr(j['status']),
         actorName: unwrap(j['actor_name'] ?? j['user_name']),
+        ref: asStr(j['ref']),
         at: asDate(j['at'] ?? j['created_at'] ?? j['date']),
       );
+
+  /// The title in the app's language, falling back to the other language,
+  /// then the single `title`. Empty when the server sent none.
+  String localizedTitle(String locale) {
+    final picked = pickLocalized(locale: locale, ar: titleAr, en: titleEn);
+    return picked.isNotEmpty ? picked : title;
+  }
 }
 
 class PaymentTerm {
@@ -361,4 +396,80 @@ class PaymentTerm {
       );
 
   String get label => displayName.isNotEmpty ? displayName : (name.isNotEmpty ? name : code);
+}
+
+/// What `POST /purchase_drafts/{id}/submit` answers: the order, and the
+/// credit check that ran on it.
+class DraftSubmitResult {
+  final PurchaseOrder order;
+  final CreditReview? creditReview;
+
+  const DraftSubmitResult({required this.order, this.creditReview});
+
+  factory DraftSubmitResult.fromJson(Map<String, dynamic> j) => DraftSubmitResult(
+        order: PurchaseOrder.fromJson(asMap(j['purchase_order'])),
+        creditReview:
+            j['credit_review'] is Map ? CreditReview.fromJson(asMap(j['credit_review'])) : null,
+      );
+}
+
+/// `credit_review` on submit. A `failed` or `manual_review` check still
+/// creates the order — on credit hold, which the trader must be told.
+class CreditReview {
+  final String status;
+  final String reasonCode;
+  final String message;
+  final double? availableBefore;
+  final double? availableAfter;
+
+  const CreditReview({
+    required this.status,
+    required this.reasonCode,
+    required this.message,
+    required this.availableBefore,
+    required this.availableAfter,
+  });
+
+  factory CreditReview.fromJson(Map<String, dynamic> j) => CreditReview(
+        status: asStr(j['status']),
+        reasonCode: asStr(j['reason_code']),
+        message: unwrap(j['message']),
+        availableBefore: j['available_before'] == null ? null : asNum(j['available_before']),
+        availableAfter: j['available_after'] == null ? null : asNum(j['available_after']),
+      );
+
+  bool get isHold => status == 'failed' || status == 'manual_review';
+}
+
+/// One entry of the `errors[]` a refused submit carries (422): the contract
+/// rules, the delivery branch, the order minimum. [skuId] points at the
+/// draft line it is about.
+class SubmitRuleError {
+  final String code;
+  final String message;
+  final int? skuId;
+  final double? minQty;
+  final double? maxQty;
+
+  const SubmitRuleError({
+    required this.code,
+    required this.message,
+    this.skuId,
+    this.minQty,
+    this.maxQty,
+  });
+
+  factory SubmitRuleError.fromJson(Map<String, dynamic> j) => SubmitRuleError(
+        code: asStr(j['code']),
+        message: unwrap(j['message']),
+        skuId: asIntOrNull(j['sku_id']),
+        minQty: j['min_qty'] == null ? null : asNum(j['min_qty']),
+        maxQty: j['max_qty'] == null ? null : asNum(j['max_qty']),
+      );
+
+  /// The `errors[]` of a refused submit's body ([details] of a `Failed`).
+  static List<SubmitRuleError> listFrom(Map<String, dynamic>? details) =>
+      details == null ? const [] : asList(details['errors'], SubmitRuleError.fromJson);
+
+  bool get isBranch => code.startsWith('delivery_branch');
 }

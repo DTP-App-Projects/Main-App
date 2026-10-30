@@ -1,3 +1,4 @@
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -7,12 +8,15 @@ import '../../../core/network/paged.dart';
 import '../../../core/ui/form_status.dart';
 import '../../../core/ui/paged_cubit.dart';
 import '../../../core/workspace/workspace.dart';
+import '../../../data/models/lookups/lookup_item.dart';
 import '../../../data/models/trade/catalog.dart';
 import '../../../data/models/trade/delivery_note.dart';
 import '../../../data/models/trade/invoice.dart';
+import '../../../data/models/trade/payment_notice.dart';
 import '../../../data/models/trade/pricing.dart';
 import '../../../data/models/trade/supplier_summary.dart';
 import '../../../data/repositories/catalog_repository.dart';
+import '../../../data/repositories/lookups_repository.dart';
 import '../../../data/repositories/receivables_repository.dart';
 import '../../../data/repositories/shipments_repository.dart';
 import '../../../data/repositories/supplier_repository.dart';
@@ -43,12 +47,18 @@ class SkuRulesState {
   final bool offline;
   final SubmitState action;
 
+  /// For the sector chips and the tier editor.
+  final List<LookupItem> sectors;
+  final List<LookupItem> paymentTerms;
+
   const SkuRulesState({
     this.loading = true,
     this.product,
     this.errorMessage,
     this.offline = false,
     this.action = const SubmitState(),
+    this.sectors = const [],
+    this.paymentTerms = const [],
   });
 
   SkuRulesState copyWith({
@@ -57,9 +67,13 @@ class SkuRulesState {
     String? errorMessage,
     bool? offline,
     SubmitState? action,
+    List<LookupItem>? sectors,
+    List<LookupItem>? paymentTerms,
     bool clearError = false,
   }) =>
       SkuRulesState(
+        sectors: sectors ?? this.sectors,
+        paymentTerms: paymentTerms ?? this.paymentTerms,
         loading: loading ?? this.loading,
         product: product ?? this.product,
         errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
@@ -76,7 +90,9 @@ class SkuRulesCubit extends Cubit<SkuRulesState> {
   final SupplierRepository _supplier;
   final int productId;
 
-  SkuRulesCubit(this._catalog, this._supplier, this.productId)
+  final LookupsRepository? _lookups;
+
+  SkuRulesCubit(this._catalog, this._supplier, this.productId, [this._lookups])
       : super(const SkuRulesState());
 
   Future<void> load() async {
@@ -85,6 +101,7 @@ class SkuRulesCubit extends Cubit<SkuRulesState> {
     final result = await _catalog.product(productId);
     if (result case Ok(:final data)) {
       emit(state.copyWith(loading: false, product: data));
+      await _loadPickers();
       return;
     }
     emit(state.copyWith(
@@ -94,6 +111,19 @@ class SkuRulesCubit extends Cubit<SkuRulesState> {
     ));
   }
 
+  /// Sectors and payment terms, once — only the editor needs them.
+  Future<void> _loadPickers() async {
+    final lookups = _lookups;
+    if (lookups == null || state.sectors.isNotEmpty) return;
+    final sectors = await lookups.items(Lookup.businessSectors);
+    final terms = await lookups.items(Lookup.paymentTerms);
+    if (isClosed) return;
+    emit(state.copyWith(sectors: sectors.dataOrNull, paymentTerms: terms.dataOrNull));
+  }
+
+  /// [businessSectorIds] and [tiers] are sent only when the user changed
+  /// them: the tier list replaces the SKU's, so re-sending a list read from
+  /// an unpublished shape could wipe tiers the app failed to read.
   Future<bool> save({
     required int skuId,
     double? minOrderQty,
@@ -102,6 +132,8 @@ class SkuRulesCubit extends Cubit<SkuRulesState> {
     String? skuStatus,
     String? barcode,
     bool? barcodeRequired,
+    List<int>? businessSectorIds,
+    List<SkuTierInput>? tiers,
   }) async {
     if (state.action.isSubmitting) return false;
     emit(state.copyWith(action: const SubmitState(status: FormStatus.submitting)));
@@ -115,6 +147,8 @@ class SkuRulesCubit extends Cubit<SkuRulesState> {
       skuStatus: skuStatus,
       barcode: barcode,
       barcodeRequired: barcodeRequired,
+      businessSectorIds: businessSectorIds,
+      tiers: tiers,
     );
     emit(state.copyWith(action: result.failureState));
 
@@ -297,6 +331,20 @@ class CreditCubit extends Cubit<CreditState> {
     int? reviewCycleDays,
   }) async {
     if (state.action.isSubmitting) return false;
+    // A decrease applies at once; an increase needs an addendum both
+    // signatories sign (guide Part 6.4). This screen used to PUT a higher
+    // limit straight through, skipping the addendum.
+    final current = state.profile?.creditLimit ?? 0;
+    if (creditLimit > current + 0.005) {
+      emit(state.copyWith(
+        action: SubmitState(
+          status: FormStatus.failure,
+          message: 'credit.raise_needs_addendum'.tr(),
+          bag: {'credit_limit': ['credit.raise_needs_addendum'.tr()]},
+        ),
+      ));
+      return false;
+    }
     emit(state.copyWith(action: const SubmitState(status: FormStatus.submitting)));
 
     final result = await _repo.saveCredit(
@@ -545,6 +593,26 @@ class IssueInvoiceCubit extends Cubit<IssueInvoiceState> {
   }
 }
 
+/// `GET /payment_notices?status=…` for the supplier's review inbox —
+/// `submitted` (waiting on this side) until the user picks another filter.
+class PaymentNoticesInboxCubit extends PagedCubit<PaymentNotice> {
+  final ReceivablesRepository _repo;
+
+  PaymentNoticesInboxCubit(this._repo);
+
+  static const filters = <String?>['submitted', 'confirmed', 'rejected', null];
+
+  String? status = 'submitted';
+
+  @override
+  Future<ApiResult<Paged<PaymentNotice>>> fetchPage(int page) => _repo.paymentNotices(
+        page: page,
+        statuses: status == null ? const [] : [status!],
+      );
+
+  Future<void> setStatus(String? value) => applyFilter(() => status = value);
+}
+
 class CollectionsInboxCubit extends PagedCubit<CollectionReceipt> {
   final ReceivablesRepository _repo;
 
@@ -562,36 +630,6 @@ class CollectionsInboxCubit extends PagedCubit<CollectionReceipt> {
   Future<bool> decide({required int id, required String status}) async {
     final result = await _repo.decideCollection(id: id, status: status);
     if (result is Ok<CollectionReceipt> || result is NoContent<CollectionReceipt>) {
-      await load();
-      return true;
-    }
-    emit(state.copyWith(errorMessage: result.failureMessage));
-    return false;
-  }
-}
-
-class ReturnsInboxCubit extends PagedCubit<PostInvoiceReturn> {
-  final ReceivablesRepository _repo;
-
-  String? status;
-
-  ReturnsInboxCubit(this._repo);
-
-  @override
-  Future<ApiResult<Paged<PostInvoiceReturn>>> fetchPage(int page) =>
-      _repo.returns(page: page, status: status);
-
-  Future<void> setStatus(String? value) => applyFilter(() => status = value);
-
-  /// Approving issues the credit note. The transitions each side may make
-  /// differ, hence `403 post_invoice_return_transition_not_allowed_for_role`.
-  Future<bool> decide({
-    required int id,
-    required String status,
-    String? reason,
-  }) async {
-    final result = await _repo.decideReturn(id: id, status: status, reason: reason);
-    if (result is Ok<PostInvoiceReturn> || result is NoContent<PostInvoiceReturn>) {
       await load();
       return true;
     }

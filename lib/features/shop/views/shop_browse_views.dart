@@ -6,9 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/session/session_cubit.dart';
 import '../../../core/ui/ui.dart';
 import '../../../core/utils/roots/app_router.dart';
 import '../../../core/utils/services/remote_services/service_locator.dart';
+import '../../../data/models/bootstrap/flags.dart';
 import '../../../data/models/shop/shop_product.dart';
 import '../../../data/repositories/shop_repository.dart';
 import '../view_models/shop_cubits.dart';
@@ -54,13 +56,15 @@ class _ShopHomeBody extends StatelessWidget {
             onPressed: () => context.push(AppRoutes.shopFavorites),
           ),
           const SizedBox(width: AppTokens.space2),
-          AppCircleButton(
-            size: 40,
-            tooltip: 'shop.cart'.tr(),
-            icon: Icons.shopping_cart_outlined,
-            count: state.home?.cartCount ?? 0,
-            onPressed: () => context.push(AppRoutes.shopCart),
-          ),
+          if (consumerCheckoutOpen()) ...[
+            AppCircleButton(
+              size: 40,
+              tooltip: 'shop.cart'.tr(),
+              icon: Icons.shopping_cart_outlined,
+              count: state.home?.cartCount ?? 0,
+              onPressed: () => context.push(AppRoutes.shopCart),
+            ),
+          ],
           const SizedBox(width: AppTokens.space4),
         ],
       ),
@@ -961,3 +965,10 @@ class _ShopHomeSkeleton extends StatelessWidget {
         ),
       );
 }
+
+/// Consumer cart and checkout are closed by owner switch (spec §13,
+/// `LegacyShopGate`): the entry points are hidden, the code is kept so the
+/// owner can reopen them, and a stray call answers `403
+/// consumer_checkout_disabled` with its own message.
+bool consumerCheckoutOpen() =>
+    getIt<SessionCubit>().state.bootstrap?.platformFlags.consumerCheckoutEnabled ?? false;

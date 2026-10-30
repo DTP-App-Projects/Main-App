@@ -16,6 +16,17 @@ class LoginCubit extends Cubit<SubmitState> {
 
   LoginCubit(this._auth, this._session, this._push) : super(const SubmitState());
 
+  /// Set when the password was right but the email is not confirmed yet —
+  /// the server has already mailed a fresh code. The view takes it (once)
+  /// and opens the Confirm email screen.
+  EmailVerificationChallenge? _verification;
+
+  EmailVerificationChallenge? takeVerification() {
+    final challenge = _verification;
+    _verification = null;
+    return challenge;
+  }
+
   Future<void> submit({required String email, required String password}) async {
     if (state.isSubmitting) return;
     emit(const SubmitState(status: FormStatus.submitting));
@@ -30,6 +41,14 @@ class LoginCubit extends Cubit<SubmitState> {
     );
 
     switch (result) {
+      // `email_verify_pending`: the code screen, never a session — checked
+      // before the session case because the answer may still carry a jwt.
+      case Ok<AuthUser>(:final data) when data.emailVerifyPending:
+        _verification = EmailVerificationChallenge(
+          email: data.email.isEmpty ? email.trim() : data.email,
+        );
+        emit(const SubmitState(status: FormStatus.success));
+
       case Ok<AuthUser>(:final data) when data.hasSession:
         emit(const SubmitState(status: FormStatus.success));
         await _session.onAuthenticated(data);
@@ -44,6 +63,20 @@ class LoginCubit extends Cubit<SubmitState> {
             message: ErrorMessages.forCode('unexpected_error'),
           ),
         );
+
+      // `403 email_verification_required` — checked before anything generic:
+      // it is neither an expired session nor an error to show.
+      case Failed<AuthUser>(:final code, :final details)
+          when EmailVerificationChallenge.isCode(code) ||
+              EmailVerificationChallenge.matches(details ?? const {}):
+        final challenge = EmailVerificationChallenge.fromJson(details ?? const {});
+        _verification = EmailVerificationChallenge(
+          email: challenge.email.isEmpty ? email.trim() : challenge.email,
+          codeSent: challenge.codeSent,
+          expiresInSeconds: challenge.expiresInSeconds,
+          message: challenge.message,
+        );
+        emit(const SubmitState(status: FormStatus.success));
 
       // Covers `401 invalid_email` / `invalid_password` and the suspended
       // account, which the server returns as a 200 with `status: failed`.

@@ -20,12 +20,17 @@ class OnboardingProgress extends StatelessWidget {
   final int stepsComplete;
   final int stepsTotal;
 
+  /// Off when the screen already points at the next step itself, so the
+  /// same advice is not given twice in two voices.
+  final bool showHint;
+
   const OnboardingProgress({
     super.key,
     required this.journey,
     required this.organizationStatus,
     required this.stepsComplete,
     required this.stepsTotal,
+    this.showHint = true,
   });
 
   @override
@@ -96,7 +101,7 @@ class OnboardingProgress extends StatelessWidget {
               ],
             ],
           ),
-          if (journey.nextBestAction.isNotEmpty) ...[
+          if (showHint && journey.nextBestAction.isNotEmpty) ...[
             const SizedBox(height: AppTokens.space4),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -136,6 +141,13 @@ class StepRow extends StatelessWidget {
   /// The step's position, shown in the disc while it is still to do.
   final int? number;
 
+  /// Not needed to send for review; said so while it is still to do.
+  final bool optional;
+
+  /// What the step holds or needs ("2 added", "Pick sectors and channels"),
+  /// after the status word, so a row answers more than done / not done.
+  final String? detail;
+
   final VoidCallback? onTap;
 
   const StepRow({
@@ -143,6 +155,8 @@ class StepRow extends StatelessWidget {
     required this.label,
     required this.complete,
     this.locked = false,
+    this.optional = false,
+    this.detail,
     this.number,
     this.onTap,
   });
@@ -175,7 +189,7 @@ class StepRow extends StatelessWidget {
           textDirection: TextDirection.ltr,
         ),
       );
-      statusText = 'onboarding.step_todo'.tr();
+      statusText = optional ? 'onboarding.step_optional'.tr() : 'onboarding.step_todo'.tr();
       statusColor = t.textSecondary;
     }
 
@@ -201,9 +215,18 @@ class StepRow extends StatelessWidget {
                     children: [
                       Text(label, style: theme.textTheme.titleSmall),
                       const SizedBox(height: 2),
-                      Text(
-                        statusText,
-                        style: theme.textTheme.bodySmall?.copyWith(color: statusColor),
+                      Text.rich(
+                        TextSpan(
+                          text: statusText,
+                          style: theme.textTheme.bodySmall?.copyWith(color: statusColor),
+                          children: [
+                            if (detail != null && detail!.isNotEmpty)
+                              TextSpan(
+                                text: '  ·  $detail',
+                                style: theme.textTheme.bodySmall?.copyWith(color: t.textSecondary),
+                              ),
+                          ],
+                        ),
                       ),
                     ],
                   ),

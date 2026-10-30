@@ -213,7 +213,6 @@ class _PriceListFormState extends State<_PriceListForm> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          FormMessage(message: _error),
           AppCard(
             padding: const EdgeInsetsDirectional.fromSTEB(
               AppTokens.space4,
@@ -275,6 +274,7 @@ class _PriceListFormState extends State<_PriceListForm> {
             ),
           ),
           const SizedBox(height: AppTokens.space5),
+          FormMessage(message: _error),
           SubmitButton(busy: _busy, label: 'common.save'.tr(), onPressed: _save),
         ],
       ),
@@ -362,7 +362,6 @@ class _PriceItemFormState extends State<_PriceItemForm> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          FormMessage(message: _error),
           AppCard(
             padding: cardPadding,
             child: Column(
@@ -454,6 +453,7 @@ class _PriceItemFormState extends State<_PriceItemForm> {
             ),
           ),
           const SizedBox(height: AppTokens.space5),
+          FormMessage(message: _error),
           SubmitButton(busy: _busy, label: 'common.save'.tr(), onPressed: _save),
         ],
       ),

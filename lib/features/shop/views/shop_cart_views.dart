@@ -138,8 +138,6 @@ class _CartBody extends StatelessWidget {
                     if (id != null) cubit.setAddress(id);
                   },
                 ),
-              if (state.action.status == FormStatus.failure)
-                FormMessage(message: state.action.message),
             ],
           );
         },
@@ -152,12 +150,21 @@ class _CartBody extends StatelessWidget {
                   MoneyText(cart.totals.total, style: AppType.ledger(t.textPrimary)),
                 ],
               ),
-              child: SubmitButton(
-                busy: state.action.isSubmitting,
-                label: 'shop.checkout'.tr(),
-                // No address, no checkout — and never a second tap while the
-                // first is in flight.
-                onPressed: state.addressId == null ? null : () => _checkout(context),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // A refused checkout is answered right above the button.
+                  if (state.action.status == FormStatus.failure)
+                    FormMessage(message: state.action.message),
+                  SubmitButton(
+                    busy: state.action.isSubmitting,
+                    label: 'shop.checkout'.tr(),
+                    // No address, no checkout — and never a second tap while
+                    // the first is in flight.
+                    onPressed: state.addressId == null ? null : () => _checkout(context),
+                  ),
+                ],
               ),
             )
           : null,
@@ -493,6 +500,17 @@ class _OrderDetailBody extends StatelessWidget {
       child: Text('shop.as_buyer'.tr(), style: theme.textTheme.labelSmall),
     );
 
+    // A refused action is answered right above the buttons, in the bar.
+    final failed = state.action.status == FormStatus.failure;
+    Widget answered(Widget actions) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (failed) FormMessage(message: state.action.message),
+            actions,
+          ],
+        );
+
     Widget? bottomBar;
     if (showReceipt && showSellerActions) {
       // The side could not be read — both are offered, each labelled, and
@@ -504,18 +522,19 @@ class _OrderDetailBody extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (failed) FormMessage(message: state.action.message),
                   sellerLabel,
                   sellerActions,
                   const SizedBox(height: AppTokens.space2),
                   buyerLabel,
                 ],
               ),
-        child: receiptButton,
+        child: transitions.isEmpty ? answered(receiptButton) : receiptButton,
       );
     } else if (showReceipt) {
-      bottomBar = AppBottomBar(child: receiptButton);
+      bottomBar = AppBottomBar(child: answered(receiptButton));
     } else if (showSellerActions && transitions.isNotEmpty) {
-      bottomBar = AppBottomBar(child: sellerActions);
+      bottomBar = AppBottomBar(child: answered(sellerActions));
     }
 
     return Scaffold(
@@ -526,8 +545,8 @@ class _OrderDetailBody extends StatelessWidget {
         child: ListView(
           padding: AppTokens.pagePadding,
           children: [
-            if (state.action.status == FormStatus.failure)
-              FormMessage(message: state.action.message),
+            // No action bar to answer from: the message stays on top.
+            if (bottomBar == null && failed) FormMessage(message: state.action.message),
             AppCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

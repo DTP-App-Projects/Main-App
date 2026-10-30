@@ -13,6 +13,10 @@ import '../view_models/onboarding_form_cubits.dart';
 
 /// `PUT /api/v2/onboarding/profile` + `POST .../profile/submit`.
 ///
+/// Sectors **and channels** on one screen, saved together, like the web
+/// owner console. `profile/submit` checks the *saved* channels, and sign-up
+/// saves none — so the channel chips are what make a profile submittable.
+///
 /// One screen per workspace. Saving keeps a draft; **submitting starts an
 /// independent review for that one side**, which is why an organization can
 /// end up approved as a trader and still pending as a supplier.
@@ -47,6 +51,7 @@ class _ProfileFormState extends State<_ProfileForm> {
 
   final _notes = TextEditingController();
   final Set<int> _sectorIds = {};
+  final Set<String> _channelCodes = {};
   String? _supplierNature;
   OnboardingProfile? _existing;
   bool _prefilled = false;
@@ -69,12 +74,23 @@ class _ProfileFormState extends State<_ProfileForm> {
       _sectorIds
         ..clear()
         ..addAll(profile.sectorIds);
+      // Already holds the channels suggested by the sectors — the web form
+      // pre-ticks the same list.
+      _channelCodes
+        ..clear()
+        ..addAll(profile.channelCodes);
       _supplierNature = profile.supplierNature.isEmpty ? null : profile.supplierNature;
       _prefilled = true;
     });
   }
 
+  /// The submit check needs at least one of each, and an empty channel list
+  /// would overwrite the saved one with nothing.
+  bool get _canSave =>
+      _sectorIds.isNotEmpty && _channelCodes.isNotEmpty && (!_isSupplier || _supplierNature != null);
+
   Future<void> _save({required bool thenSubmit}) async {
+    if (!_canSave) return;
     FocusScope.of(context).unfocus();
     final cubit = context.read<ProfileFormCubit>();
 
@@ -83,6 +99,7 @@ class _ProfileFormState extends State<_ProfileForm> {
       profileId: _existing?.id,
       supplierNature: _supplierNature,
       sectorIds: _sectorIds.toList(),
+      channelCodes: _channelCodes.toList(),
       notes: _notes.text,
     );
     if (!saved || !mounted) return;
@@ -92,7 +109,9 @@ class _ProfileFormState extends State<_ProfileForm> {
       if (!submitted || !mounted) return;
     }
 
-    await context.read<SessionCubit>().refresh();
+    // Silent, as on every onboarding screen: a loud refresh bounced
+    // through the splash and rebuilt the wizard underneath.
+    await context.read<SessionCubit>().refresh(silent: true);
     if (!mounted) return;
     // Names the step so the wizard re-reads the bootstrap and nothing else.
     Navigator.of(context).pop(
@@ -159,8 +178,6 @@ class _ProfileFormState extends State<_ProfileForm> {
                   tone: AppTone.info,
                   icon: Icons.lock_outline_rounded,
                 ),
-              FormMessage(message: state.submit.message),
-
               if (_isSupplier)
                 AppCard(
                   margin: const EdgeInsetsDirectional.only(bottom: AppTokens.space2),
@@ -176,7 +193,8 @@ class _ProfileFormState extends State<_ProfileForm> {
                     codes: _natures,
                     labelOf: (code) => 'profile.nature_$code'.tr(),
                     error: state.submit.fieldError('supplier_nature'),
-                    required: false,
+                    // «طبيعة المورد» is part of a supplier profile (guide 2.2).
+                    required: true,
                     enabled: !locked,
                     onChanged: (value) => setState(() => _supplierNature = value),
                   ),
@@ -218,6 +236,48 @@ class _ProfileFormState extends State<_ProfileForm> {
                         ],
                       ),
               ),
+
+              AppSectionLabel('profile.channels'.tr()),
+              AppCard(
+                child: state.channels.isEmpty
+                    ? Text(
+                        'profile.channels_empty'.tr(),
+                        style: theme.textTheme.bodySmall?.copyWith(color: t.textTertiary),
+                      )
+                    : Wrap(
+                        spacing: AppTokens.space2,
+                        runSpacing: AppTokens.space2,
+                        children: [
+                          for (final channel in state.channels)
+                            FilterChip(
+                              label: Text(channel.label),
+                              selected: _channelCodes.contains(channel.code),
+                              onSelected: locked
+                                  ? null
+                                  : (selected) => setState(() {
+                                        if (selected) {
+                                          _channelCodes.add(channel.code);
+                                        } else {
+                                          _channelCodes.remove(channel.code);
+                                        }
+                                      }),
+                            ),
+                        ],
+                      ),
+              ),
+              if (state.submit.fieldError('channel_codes') case final error?)
+                Padding(
+                  padding: const EdgeInsetsDirectional.fromSTEB(
+                    AppTokens.space1,
+                    AppTokens.space2,
+                    AppTokens.space1,
+                    0,
+                  ),
+                  child: Text(
+                    error,
+                    style: theme.textTheme.labelSmall?.copyWith(color: t.fieldError),
+                  ),
+                ),
               const SizedBox(height: AppTokens.space4),
 
               AppCard(
@@ -248,16 +308,27 @@ class _ProfileFormState extends State<_ProfileForm> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      // The save's answer, right above the buttons.
+                      FormMessage(message: state.submit.message),
+                      if (!_canSave)
+                        Padding(
+                          padding: const EdgeInsetsDirectional.only(bottom: AppTokens.space2),
+                          child: Text(
+                            'profile.pick_both'.tr(),
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodySmall?.copyWith(color: t.textSecondary),
+                          ),
+                        ),
                       SubmitButton(
                         busy: state.submit.isSubmitting,
                         label: 'profile.submit_review'.tr(),
-                        onPressed: () => _save(thenSubmit: true),
+                        onPressed: _canSave ? () => _save(thenSubmit: true) : null,
                       ),
                       const SizedBox(height: AppTokens.space2),
                       AppButton.outline(
                         label: 'profile.save_draft'.tr(),
                         height: 48,
-                        onPressed: state.submit.isSubmitting
+                        onPressed: state.submit.isSubmitting || !_canSave
                             ? null
                             : () => _save(thenSubmit: false),
                       ),

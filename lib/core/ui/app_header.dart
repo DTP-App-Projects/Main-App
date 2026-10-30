@@ -160,7 +160,6 @@ class AppBackIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final rtl = Directionality.of(context) == TextDirection.rtl;
     return Container(
       width: 40,
       height: 40,
@@ -170,8 +169,11 @@ class AppBackIcon extends StatelessWidget {
         border: Border.all(color: t.border),
       ),
       alignment: Alignment.center,
+      // `chevron_left` mirrors itself in RTL (`matchTextDirection`), so it
+      // points against the reading direction in both languages. Choosing it
+      // by direction as well used to undo that mirroring.
       child: Icon(
-        rtl ? Icons.chevron_right_rounded : Icons.chevron_left_rounded,
+        Icons.chevron_left_rounded,
         size: 24,
         color: t.textPrimary,
       ),

@@ -231,6 +231,13 @@ class _WalletBody extends StatelessWidget {
       body: Builder(
         builder: (context) {
           if (state.loading && state.wallet == null) return const DetailSkeleton();
+          if (state.disabled) {
+            return AppEmptyState(
+              icon: Icons.account_balance_wallet_outlined,
+              title: 'wallet.unavailable_title'.tr(),
+              body: 'wallet.unavailable_body'.tr(),
+            );
+          }
           if (state.wallet == null) {
             if (state.offline) return AppOfflineState(onRetry: cubit.load);
             return AppErrorState(message: _messageOr(state.errorMessage), onRetry: cubit.load);
@@ -245,10 +252,6 @@ class _WalletBody extends StatelessWidget {
             child: ListView(
               padding: AppTokens.pagePadding,
               children: [
-                FormMessage(
-                  message: state.action.message,
-                  success: state.action.isSuccess,
-                ),
                 // The balance hero: the one gradient on the screen.
                 Container(
                   padding: const EdgeInsetsDirectional.all(AppTokens.cardPadding),
@@ -300,6 +303,10 @@ class _WalletBody extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: AppTokens.space4),
+                FormMessage(
+                  message: state.action.message,
+                  success: state.action.isSuccess,
+                ),
                 AppButton.solid(
                   icon: Icons.add_card_rounded,
                   label: 'wallet.topup'.tr(),
@@ -482,8 +489,6 @@ class _TopupSheetState extends State<_TopupSheet> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        FormMessage(message: state.action.message),
-
         AppField(
           controller: _amount,
           label: 'invoice.amount'.tr(),
@@ -530,6 +535,7 @@ class _TopupSheetState extends State<_TopupSheet> {
         ],
 
         const SizedBox(height: AppTokens.space2),
+        FormMessage(message: state.action.message),
         SubmitButton(
           busy: state.action.isSubmitting,
           label: 'wallet.request_topup'.tr(),
@@ -591,10 +597,6 @@ class _SubscriptionBody extends StatelessWidget {
             child: ListView(
               padding: AppTokens.pagePadding,
               children: [
-                FormMessage(
-                  message: state.action.message,
-                  success: state.action.isSuccess,
-                ),
                 if (summary != null)
                   AppCard(
                     child: Column(
@@ -640,6 +642,12 @@ class _SubscriptionBody extends StatelessWidget {
                   ),
 
                 AppSectionLabel('subscription.billing_mode'.tr()),
+                // Above the billing-mode choices and the trial button it
+                // answers, both of which follow.
+                FormMessage(
+                  message: state.action.message,
+                  success: state.action.isSuccess,
+                ),
                 AppCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,

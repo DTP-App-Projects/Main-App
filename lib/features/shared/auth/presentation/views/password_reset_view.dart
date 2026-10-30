@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
-import 'package:pin_code_fields/pin_code_fields.dart';
 
 import '../../../../../core/session/session_store.dart';
 import '../../../../../core/ui/ui.dart';
@@ -151,7 +150,7 @@ class _VerifyStepState extends State<_VerifyStep> {
           AppFieldShell(
             label: 'reset.code'.tr(),
             bottom: 0,
-            child: _OtpBoxes(
+            child: AuthCodeBoxes(
               controller: _code,
               error: serverError,
               onChanged: (_) => cubit.clearMessage(),
@@ -171,87 +170,6 @@ class _VerifyStepState extends State<_VerifyStep> {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Six Driver-style boxes for the mailed code. Digits read LTR in both
-/// languages; the platform can still autofill it from the notification.
-class _OtpBoxes extends StatelessWidget {
-  final TextEditingController controller;
-  final String? error;
-  final ValueChanged<String> onChanged;
-  final ValueChanged<String> onCompleted;
-
-  const _OtpBoxes({
-    required this.controller,
-    required this.error,
-    required this.onChanged,
-    required this.onCompleted,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    final theme = Theme.of(context);
-    final hasError = error != null;
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final box = ((constraints.maxWidth - 5 * AppTokens.space2) / 6).clamp(36.0, 52.0);
-        return Directionality(
-          textDirection: TextDirection.ltr,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              PinCodeTextField(
-                appContext: context,
-                length: 6,
-                controller: controller,
-                // The controller belongs to the step's State.
-                autoDisposeControllers: false,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                animationType: AnimationType.fade,
-                enableActiveFill: true,
-                autoFocus: true,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                cursorColor: t.primary,
-                textStyle: theme.textTheme.titleLarge,
-                errorTextSpace: 22,
-                errorTextDirection: Directionality.of(context),
-                validator: (value) => (value == null || value.trim().length != 6)
-                    ? 'validation.code_length'.tr()
-                    : null,
-                pinTheme: PinTheme(
-                  shape: PinCodeFieldShape.box,
-                  borderRadius: AppTokens.mdRadius,
-                  fieldHeight: box + 4,
-                  fieldWidth: box,
-                  borderWidth: 1,
-                  activeBorderWidth: 1.5,
-                  selectedBorderWidth: 1.5,
-                  activeColor: hasError ? t.fieldError : t.primary,
-                  selectedColor: t.primary,
-                  inactiveColor: hasError ? t.fieldError : t.inputBorder,
-                  activeFillColor: t.inputFill,
-                  selectedFillColor: t.surface,
-                  inactiveFillColor: t.inputFill,
-                  errorBorderColor: t.fieldError,
-                ),
-                onChanged: onChanged,
-                onCompleted: onCompleted,
-              ),
-              if (hasError)
-                Text(
-                  error!,
-                  textDirection: Directionality.of(context),
-                  style: theme.textTheme.labelSmall?.copyWith(color: t.fieldError),
-                ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

@@ -59,7 +59,21 @@ class ProfileJourney {
   final int score;
   final List<String> missing;
 
-  const ProfileJourney({required this.status, required this.score, required this.missing});
+  /// The server's own readiness checks, keyed by a stable code — seen live:
+  /// `organization`, `sectors`, `branches`, `documents`, `channels` (trader),
+  /// plus `bank_accounts` on a supplier. Unlike [missing] these are not prose.
+  final Map<String, bool> checks;
+
+  /// The server's hint for what to do next, already localized.
+  final String nextStep;
+
+  const ProfileJourney({
+    required this.status,
+    required this.score,
+    required this.missing,
+    this.checks = const {},
+    this.nextStep = '',
+  });
 
   static const empty = ProfileJourney(status: '', score: 0, missing: []);
 
@@ -67,6 +81,8 @@ class ProfileJourney {
         status: asStr(j['status']),
         score: asInt(j['score']),
         missing: asStrList(j['missing']),
+        checks: asMap(j['checks']).map((key, value) => MapEntry(key, asBool(value))),
+        nextStep: unwrap(j['next_step']),
       );
 
   bool get isActive => status == 'active';

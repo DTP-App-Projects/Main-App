@@ -2,8 +2,10 @@ import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/push/push_service.dart';
 import '../../../../core/ui/ui.dart';
 import '../../../../core/utils/roots/app_router.dart';
 import '../../../../core/utils/services/remote_services/service_locator.dart';
@@ -11,6 +13,7 @@ import '../../../../data/models/trade/delivery_note.dart';
 import '../../../../data/models/trade/purchase_order.dart';
 import '../../../../data/repositories/shipments_repository.dart';
 import '../view_models/shipments_cubits.dart';
+import 'live_driver_map.dart';
 
 const _shipmentStatuses = [
   'created',
@@ -104,8 +107,11 @@ class ShipmentTrackingView extends StatefulWidget {
 
 class _ShipmentTrackingViewState extends State<ShipmentTrackingView>
     with WidgetsBindingObserver {
-  late final TrackingCubit _cubit =
-      TrackingCubit(getIt<ShipmentsRepository>(), widget.deliveryNoteId);
+  late final TrackingCubit _cubit = TrackingCubit(
+    getIt<ShipmentsRepository>(),
+    widget.deliveryNoteId,
+    driverTrips: getIt<PushService>().driverTrips,
+  );
 
   @override
   void initState() {
@@ -162,15 +168,55 @@ class _TrackingBody extends StatelessWidget {
       ),
       bottomNavigationBar: (note != null && note.canReceive)
           ? AppBottomBar(
-              child: AppButton.primary(
-                label: 'receipt.confirm'.tr(),
-                icon: Icons.inventory_2_outlined,
-                onPressed: () => context.push(AppRoutes.goodsReceiptFor(note.id)),
-              ),
+              // Recorded already (by the driver's app, or earlier here): open
+              // the receipts rather than start a second one.
+              child: note.goodsReceiptsCount > 0
+                  ? AppButton.outline(
+                      label: 'receipt.view_existing'.tr(),
+                      icon: Icons.fact_check_outlined,
+                      onPressed: () => context.push(AppRoutes.goodsReceipts),
+                    )
+                  : AppButton.primary(
+                      label: 'receipt.confirm'.tr(),
+                      icon: Icons.inventory_2_outlined,
+                      onPressed: () => context.push(AppRoutes.goodsReceiptFor(note.id)),
+                    ),
             )
           : null,
       body: Builder(
         builder: (context) {
+          final handoff = state.handoffOtp;
+          // A tapped "driver arrived" push must show its code even before —
+          // or without — the first snapshot.
+          if (note == null && handoff != null) {
+            return RefreshIndicator(
+              onRefresh: cubit.refresh,
+              child: ListView(
+                padding: AppTokens.pagePadding,
+                children: [
+                  _HandoffCodeCard(otp: handoff, routeStopId: null),
+                  if (state.loading)
+                    const Padding(
+                      padding: EdgeInsetsDirectional.all(AppTokens.space6),
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else
+                    AppBanner(
+                      message: state.offline
+                          ? 'errors.offline'.tr()
+                          : ((state.errorMessage ?? '').isEmpty
+                              ? 'errors.generic'.tr()
+                              : state.errorMessage!),
+                      tone: AppTone.warning,
+                      action: TextButton(
+                        onPressed: cubit.refresh,
+                        child: Text('common.retry'.tr()),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          }
           if (state.loading && note == null) return const DetailSkeleton();
           if (note == null) {
             if (state.offline) return AppOfflineState(onRetry: cubit.refresh);
@@ -193,6 +239,10 @@ class _TrackingBody extends StatelessWidget {
                     tone: AppTone.danger,
                     icon: Icons.gpp_bad_outlined,
                   ),
+
+                // ---- handoff code: the one thing the trader needs at the door
+                if (handoff != null)
+                  _HandoffCodeCard(otp: handoff, routeStopId: note.routeStop?.id),
 
                 // ---- header -------------------------------------------------
                 AppCard(
@@ -252,6 +302,18 @@ class _TrackingBody extends StatelessWidget {
                     ],
                   ),
                 ),
+
+                // ---- live driver position (Firebase) ------------------------
+                if (state.following) ...[
+                  AppSectionLabel(
+                    'shipment.live_location'.tr(),
+                    trailing: AppBadge('shipment.live'.tr(), icon: Icons.circle),
+                  ),
+                  LiveDriverMap(
+                    position: state.livePosition,
+                    sharing: state.driverSharing,
+                  ),
+                ],
 
                 // ---- carrier ------------------------------------------------
                 if (note.driver != null || note.vehicle != null) ...[
@@ -318,6 +380,102 @@ class _TrackingBody extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// The code the driver scans (or types) to hand the shipment over.
+///
+/// The QR stays black on white in dark mode too: scanners need the contrast
+/// and the quiet zone, not the theme.
+class _HandoffCodeCard extends StatelessWidget {
+  final ReceiverOtp otp;
+  final int? routeStopId;
+
+  const _HandoffCodeCard({required this.otp, required this.routeStopId});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final t = context.tokens;
+    final qrText = otp.qrTextFor(routeStopId);
+    final expiresAt = otp.expiresAt;
+
+    return AppCard(
+      shadow: true,
+      margin: const EdgeInsetsDirectional.only(bottom: AppTokens.space4),
+      borderColor: t.primary,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.qr_code_2_rounded, color: t.primary),
+              const SizedBox(width: AppTokens.space2),
+              Expanded(
+                child: Text('shipment.handoff_code_title'.tr(), style: theme.textTheme.titleMedium),
+              ),
+            ],
+          ),
+          if (qrText != null) ...[
+            const SizedBox(height: AppTokens.space4),
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(AppTokens.space4),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: AppTokens.mdRadius,
+                ),
+                child: QrImageView(
+                  data: qrText,
+                  size: 240,
+                  padding: EdgeInsets.zero,
+                  backgroundColor: Colors.white,
+                  eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: Colors.black),
+                  dataModuleStyle: const QrDataModuleStyle(
+                    dataModuleShape: QrDataModuleShape.square,
+                    color: Colors.black,
+                  ),
+                  semanticsLabel: 'shipment.handoff_code_title'.tr(),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: AppTokens.space4),
+          // Digits read left to right in Arabic too.
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: SelectableText(
+              otp.code,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.displaySmall?.copyWith(
+                fontFamily: 'monospace',
+                fontFamilyFallback: const ['RobotoMono', 'Courier', 'monospace'],
+                fontWeight: FontWeight.w700,
+                letterSpacing: 8,
+                fontFeatures: const [FontFeature.tabularFigures()],
+                color: t.textPrimary,
+              ),
+            ),
+          ),
+          if (expiresAt != null) ...[
+            const SizedBox(height: AppTokens.space2),
+            Text(
+              'shipment.handoff_code_valid_until'.tr(
+                namedArgs: {'time': DateFormat.Hm('en').format(expiresAt.toLocal())},
+              ),
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(color: t.textSecondary),
+            ),
+          ],
+          const SizedBox(height: AppTokens.space3),
+          Text(
+            'shipment.handoff_code_hint'.tr(),
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(color: t.textSecondary),
+          ),
+        ],
       ),
     );
   }
@@ -543,16 +701,35 @@ class _ProofTimeline extends StatelessWidget {
 
   const _ProofTimeline({required this.proofs});
 
+  /// «صورة — الاستلام من المورد»: the proof's type and leg, translated. The
+  /// API reference describes the trail as pickup photo + signature at the
+  /// supplier and delivery photo + signature at the trader; a value outside
+  /// those still reads as words, never as a raw code.
+  static String _proofTitle(DeliveryProof proof) {
+    final type = proof.proofType.isEmpty ? '' : _word('shipment.proof', proof.proofType);
+    final leg = proof.proofCategory.isEmpty ? '' : _word('shipment.proof_leg', proof.proofCategory);
+    return [type, leg].where((s) => s.isNotEmpty).join(' — ');
+  }
+
+  static String _word(String prefix, String code) {
+    final key = '${prefix}_$code';
+    final translated = key.tr();
+    if (translated != key) return translated;
+    final words = code.replaceAll('_', ' ');
+    return words.isEmpty ? '' : words[0].toUpperCase() + words.substring(1);
+  }
+
   @override
   Widget build(BuildContext context) {
     final events = [
       for (final proof in proofs.reversed)
         TimelineEvent(
           event: proof.proofType,
-          title: proof.proofCategory.isEmpty ? proof.proofType : proof.proofCategory,
+          title: _proofTitle(proof),
           description: proof.signerName.isEmpty
               ? ''
-              : '${proof.signerName} · ${proof.signerRole}',
+              : [proof.signerName, if (proof.signerRole.isNotEmpty) _word('shipment.signer', proof.signerRole)]
+                  .join(' · '),
           status: '',
           actorName: proof.signerName,
           at: proof.capturedAt,

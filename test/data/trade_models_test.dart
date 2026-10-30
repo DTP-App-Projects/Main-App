@@ -47,13 +47,12 @@ void main() {
       );
     });
 
-    test('an approved relationship without a contract still cannot order', () {
-      // This is the case that surprises people: the relationship is fine and
-      // ordering is still refused.
-      expect(
-        supplier(relationship: 'approved').orderBlockedReason,
-        'no_contract',
-      );
+    test('an approved relationship without a contract can still order cash', () {
+      // `order_entry_ready` is false without a contract, but that is the
+      // credit rule: cash goes ahead without one (guide Part 8).
+      final approved = supplier(relationship: 'approved');
+      expect(approved.canStartOrder, isTrue);
+      expect(approved.orderBlockedReason, isNull);
     });
 
     test('"none" is a status, not an absence', () {

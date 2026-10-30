@@ -4,6 +4,11 @@ import 'supplier_summary.dart';
 /// A catalogue product. The trader reads these; only the supplier writes them.
 class Product {
   final int id;
+
+  /// The catalogue product a row points at. The supplier's public catalog
+  /// (`/suppliers/{id}/public_catalog`) sends it as `product_id`, with `id`
+  /// being the row's own — `GET /catalog/products/{id}` needs this one.
+  final int? productId;
   final int organizationId;
   final String name;
   final String nameAr;
@@ -28,6 +33,7 @@ class Product {
   final List<Sku> skus;
 
   const Product({
+    this.productId,
     required this.id,
     required this.organizationId,
     required this.name,
@@ -50,6 +56,7 @@ class Product {
 
   factory Product.fromJson(Map<String, dynamic> j) => Product(
         id: asInt(j['id']),
+        productId: asIntOrNull(j['product_id']),
         organizationId: asInt(j['organization_id']),
         name: unwrap(j['name']),
         nameAr: unwrap(j['ar_name']),
@@ -68,6 +75,9 @@ class Product {
         primarySku: j['primary_sku'] is Map ? Sku.fromJson(asMap(j['primary_sku'])) : null,
         skus: asList(j['skus'], Sku.fromJson),
       );
+
+  /// The id to open the product's detail with.
+  int get detailId => (productId == null || productId == 0) ? id : productId!;
 
   String displayName(String locale) {
     final localized = pickLocalized(locale: locale, ar: nameAr, en: nameEn);
@@ -100,6 +110,13 @@ class Sku {
   final double availableQty;
   final SkuPricing? pricing;
 
+  /// On the product `show` only: the sectors this SKU is sold to, its
+  /// general price tiers and the readiness checklist (guide Part 5.3). The
+  /// row shapes were not published; read defensively.
+  final List<int> businessSectorIds;
+  final List<SkuTier> generalTiers;
+  final Map<String, bool> catalogChecklist;
+
   const Sku({
     required this.id,
     required this.skuCode,
@@ -118,6 +135,9 @@ class Sku {
     required this.trackInventory,
     required this.availableQty,
     required this.pricing,
+    this.businessSectorIds = const [],
+    this.generalTiers = const [],
+    this.catalogChecklist = const {},
   });
 
   factory Sku.fromJson(Map<String, dynamic> j) => Sku(
@@ -138,7 +158,40 @@ class Sku {
         trackInventory: asBool(j['track_inventory']),
         availableQty: asNum(j['available_qty']),
         pricing: j['pricing'] is Map ? SkuPricing.fromJson(asMap(j['pricing'])) : null,
+        businessSectorIds: _ids(j['business_sectors'] ?? j['business_sector_ids']),
+        generalTiers: asList(j['general_tiers'] ?? j['tiers'], SkuTier.fromJson),
+        catalogChecklist: _checklist(j['catalog_checklist']),
       );
+
+  /// Ready to sell to traders: active, linked to sectors, quantity rules and
+  /// at least one general price tier. The server's own checklist wins when
+  /// it sends one.
+  Map<String, bool> get readiness => catalogChecklist.isNotEmpty
+      ? catalogChecklist
+      : {
+          'active': status == 'active',
+          'sectors': businessSectorIds.isNotEmpty,
+          'quantity_rules': minOrderQty > 0 && orderStepQty > 0,
+          'tiers': generalTiers.isNotEmpty,
+        };
+
+  bool get isReadyToSell => readiness.values.every((done) => done);
+
+  static List<int> _ids(dynamic raw) => raw is! List
+      ? const []
+      : raw.map((e) => e is Map ? asIntOrNull(e['id']) : asIntOrNull(e)).whereType<int>().toList();
+
+  /// `{key: bool}` or `[{key, done|ok|passed}]`.
+  static Map<String, bool> _checklist(dynamic raw) {
+    if (raw is Map) return raw.map((k, v) => MapEntry('$k', asBool(v is Map ? (v['done'] ?? v['ok'] ?? v['passed']) : v)));
+    if (raw is List) {
+      return {
+        for (final row in raw.whereType<Map>())
+          '${row['key'] ?? row['code']}': asBool(row['done'] ?? row['ok'] ?? row['passed']),
+      };
+    }
+    return const {};
+  }
 
   String displayName(String locale) {
     final localized = pickLocalized(locale: locale, ar: displayNameAr, en: displayNameEn);
@@ -275,4 +328,32 @@ class PriceResolution {
   bool get canOrder => matched;
 
   bool get hasDiscount => unitDiscount > 0;
+}
+
+/// A general price tier of a SKU: payment term, quantity band, final price.
+class SkuTier {
+  final int? paymentTermId;
+  final String paymentTermLabel;
+  final double minQty;
+  final double? maxQty;
+  final double finalPrice;
+
+  const SkuTier({
+    this.paymentTermId,
+    this.paymentTermLabel = '',
+    required this.minQty,
+    this.maxQty,
+    required this.finalPrice,
+  });
+
+  factory SkuTier.fromJson(Map<String, dynamic> j) {
+    final term = asMap(j['payment_term']);
+    return SkuTier(
+      paymentTermId: asIntOrNull(j['payment_term_id'] ?? term['id']),
+      paymentTermLabel: unwrap(j['payment_term_label'] ?? term['display_name'] ?? term['name']),
+      minQty: asNum(j['min_qty']),
+      maxQty: j['max_qty'] == null ? null : asNum(j['max_qty']),
+      finalPrice: asNum(j['final_price'] ?? j['price']),
+    );
+  }
 }

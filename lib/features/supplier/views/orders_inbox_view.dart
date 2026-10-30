@@ -90,22 +90,40 @@ class _InboxBody extends StatelessWidget {
                 amount: order.grandTotal,
                 currency: order.currency,
                 icon: Icons.inbox_rounded,
-                // A failed credit check is the reason an order sits here, so
-                // it earns a danger-tint badge rather than a line of small print.
-                badge: order.creditCheckStatus.isEmpty ||
-                        order.creditCheckStatus == 'passed'
+                // `credit_check_status` values are not published, so no value
+                // is treated as "passed": the badge shows the status itself,
+                // toned only by the shared (documented) status tones.
+                badge: order.creditCheckStatus.isEmpty
                     ? null
-                    : AppBadge(
-                        'order.credit_check'.tr(),
-                        tone: AppTone.danger,
-                        icon: Icons.credit_card_off_rounded,
-                      ),
+                    : _CreditCheckBadge(status: order.creditCheckStatus),
                 onTap: () => context.push(AppRoutes.supplierOrderDetailFor(order.id)),
               ),
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CreditCheckBadge extends StatelessWidget {
+  final String status;
+
+  const _CreditCheckBadge({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = switch (toneForStatus(status)) {
+      StatusTone.danger => AppTone.danger,
+      StatusTone.warn => AppTone.warning,
+      StatusTone.good => AppTone.brand,
+      StatusTone.inFlight => AppTone.info,
+      StatusTone.unknown => AppTone.neutral,
+    };
+    return AppBadge(
+      '${'order.credit_check'.tr()}: ${StatusChip.localize(status)}',
+      tone: tone,
+      icon: Icons.credit_score_outlined,
     );
   }
 }

@@ -39,6 +39,9 @@ dependencies:
   firebase_messaging: ^16.0.3
   firebase_core:
   flutter_local_notifications:
+  # Live driver position on the tracking screen (custom-token sign-in + RTDB).
+  firebase_auth: ^6.5.7
+  firebase_database: ^12.4.7
   flutter_native_splash: ^2.4.7
   pretty_dio_logger:
   flutter_html: ^3.0.0
@@ -48,6 +51,15 @@ dependencies:
   # Onboarding documents are commercial registrations and VAT certificates,
   # which are usually PDFs -- image_picker alone cannot reach them.
   file_picker: ^10.3.3
+  # The trader shows the driver a QR of the delivery handoff code.
+  qr_flutter: ^4.1.0
+  # Live driver marker on the delivery tracking screen.
+  google_maps_flutter: ^2.14.0
+  pdfx: ^2.11.0
+  share_plus: ^12.0.2
+  path_provider: ^2.1.6
+  # "My location" on the branch map picker (one fix, asked on tap only).
+  geolocator: ^14.0.2
 
 
 dev_dependencies:

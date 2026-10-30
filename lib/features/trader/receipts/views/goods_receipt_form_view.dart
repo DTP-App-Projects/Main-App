@@ -2,7 +2,10 @@ import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'package:go_router/go_router.dart';
+
 import '../../../../core/ui/ui.dart';
+import '../../../../core/utils/roots/app_router.dart';
 import '../../../../core/utils/services/remote_services/service_locator.dart';
 import '../../../../data/repositories/shipments_repository.dart';
 import '../view_models/goods_receipt_cubit.dart';
@@ -53,10 +56,18 @@ class _ReceiptBody extends StatelessWidget {
                       ],
                     )
                   : null,
-              child: SubmitButton(
-                busy: state.action.isSubmitting,
-                label: 'receipt.submit'.tr(),
-                onPressed: state.missingReason ? null : cubit.submit,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // The submit's error, right above the submit button.
+                  FormMessage(message: state.action.message),
+                  SubmitButton(
+                    busy: state.action.isSubmitting,
+                    label: 'receipt.submit'.tr(),
+                    onPressed: state.missingReason ? null : cubit.submit,
+                  ),
+                ],
               ),
             ),
       body: Builder(
@@ -81,7 +92,6 @@ class _ReceiptBody extends StatelessWidget {
           return ListView(
             padding: AppTokens.pagePadding,
             children: [
-              FormMessage(message: state.action.message),
               AppBanner(message: 'receipt.hint'.tr(), tone: AppTone.info),
 
               // ---- progress ------------------------------------------------
@@ -110,6 +120,21 @@ class _ReceiptBody extends StatelessWidget {
                 ),
               const SizedBox(height: AppTokens.space3),
 
+              // «اسم المستلم لدى التاجر».
+              AppCard(
+                padding: const EdgeInsetsDirectional.fromSTEB(
+                  AppTokens.cardPadding,
+                  AppTokens.cardPadding,
+                  AppTokens.cardPadding,
+                  0,
+                ),
+                child: _TextField(
+                  label: 'receipt.receiver_name'.tr(),
+                  required: true,
+                  onChanged: cubit.setReceiverName,
+                ),
+              ),
+              const SizedBox(height: AppTokens.space3),
               for (final draft in state.lines)
                 _ReceiptLineCard(draft: draft, cubit: cubit),
 
@@ -205,7 +230,7 @@ class _ReceiptLineCard extends StatelessWidget {
               ),
             ],
           ),
-          if (draft.rejectedQty > 0)
+          if (draft.rejectedQty > 0) ...[
             AppFieldShell(
               label: 'receipt.rejection_reason'.tr(),
               required: true,
@@ -217,6 +242,47 @@ class _ReceiptLineCard extends StatelessWidget {
                 onChanged: (value) => cubit.updateLine(draft.line.id, reason: value),
               ),
             ),
+            // The not-accepted quantity, split: «منه معيب», the rest «منه نقص».
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _QtyField(
+                    label: 'receipt.of_which_defective'.tr(),
+                    value: draft.defectQty,
+                    onChanged: (value) => cubit.updateLine(draft.line.id, defect: value),
+                  ),
+                ),
+                const SizedBox(width: AppTokens.space3),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsetsDirectional.only(top: AppTokens.space5),
+                    child: Text(
+                      'receipt.of_which_shortage'.tr(namedArgs: {'qty': _fmt(draft.shortageQty)}),
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (draft.defectTooHigh)
+              Text(
+                'receipt.defect_too_high'.tr(),
+                style: theme.textTheme.labelSmall?.copyWith(color: t.fieldError),
+              ),
+            if (draft.defectQty > 0)
+              AppFieldShell(
+                label: 'receipt.defect_note'.tr(),
+                required: true,
+                bottom: AppTokens.space3,
+                child: TextField(
+                  decoration: InputDecoration(
+                    errorText: draft.needsDefectNote ? 'receipt.defect_note_required'.tr() : null,
+                  ),
+                  onChanged: (value) => cubit.updateLine(draft.line.id, defectNote: value),
+                ),
+              ),
+          ],
           if (!draft.balances)
             AppBanner(
               message: 'receipt.unaccounted'.tr(namedArgs: {'qty': _fmt(draft.unaccounted)}),
@@ -314,22 +380,32 @@ class _ReceiptDone extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          FormMessage(message: cubit.state.action.message),
           if (receipt.qtyMismatchWithDriver)
             AppBanner(message: 'receipt.driver_mismatch'.tr(), tone: AppTone.danger),
+          // Recorded is not accepted: the trader still confirms it (code or
+          // photo + declaration) — the step that makes it final.
+          AppButton.primary(
+            label: 'receipt.go_confirm'.tr(),
+            icon: Icons.verified_outlined,
+            onPressed: () => context.pushReplacement(AppRoutes.goodsReceiptDetailFor(receipt.id)),
+          ),
+          const SizedBox(height: AppTokens.space3),
           if (receipt.isDisputed)
             AppBanner(
               message: 'receipt.disputed'.tr(),
               tone: AppTone.warning,
               icon: Icons.report_problem_outlined,
             )
-          else
+          else ...[
+            // The dispute's error, right above the dispute button.
+            FormMessage(message: cubit.state.action.message),
             AppButton.outlineDanger(
               label: 'receipt.dispute'.tr(),
               icon: Icons.report_problem_outlined,
               busy: busy,
               onPressed: busy ? null : () => _dispute(context),
             ),
+          ],
           const SizedBox(height: AppTokens.space3),
           Text(
             'receipt.dispute_hint'.tr(),
@@ -364,4 +440,35 @@ class _ReceiptDone extends StatelessWidget {
     final reason = value.trim();
     await cubit.dispute(reason);
   }
+}
+
+/// A plain text field that owns its controller and reports every edit.
+class _TextField extends StatefulWidget {
+  final String label;
+  final bool required;
+  final ValueChanged<String> onChanged;
+
+  const _TextField({required this.label, required this.onChanged, this.required = false});
+
+  @override
+  State<_TextField> createState() => _TextFieldState();
+}
+
+class _TextFieldState extends State<_TextField> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AppField(
+        controller: _controller,
+        label: widget.label,
+        required: widget.required,
+        icon: Icons.person_outline_rounded,
+        onChanged: widget.onChanged,
+      );
 }

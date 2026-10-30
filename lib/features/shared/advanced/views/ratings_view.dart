@@ -92,11 +92,6 @@ class _RatingsBodyState extends State<_RatingsBody> {
             child: ListView(
               padding: AppTokens.pagePadding,
               children: [
-                FormMessage(
-                  message: state.action.message,
-                  success: state.action.isSuccess,
-                ),
-
                 if (aggregate != null)
                   AppCard(
                     child: Column(
@@ -167,6 +162,10 @@ class _RatingsBodyState extends State<_RatingsBody> {
                         maxLength: 2000,
                         textInputAction: TextInputAction.newline,
                         serverError: state.action.fieldError('note'),
+                      ),
+                      FormMessage(
+                        message: state.action.message,
+                        success: state.action.isSuccess,
                       ),
                       SubmitButton(
                         busy: state.action.isSubmitting,

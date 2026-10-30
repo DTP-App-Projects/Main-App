@@ -23,6 +23,9 @@ class CacheKeys {
   /// two sides of a hybrid org have different themes.
   static String themeFor(int organizationId, String workspace) =>
       'tajer_theme_${organizationId}_$workspace';
+
+  /// Set once this app has saved a profile's channels (see `SavedChannels`).
+  static String channelsSavedFor(int profileId) => 'tajer_channels_saved_$profileId';
 }
 
 /// Kept for the pieces of the old shell that only ever needed the language.

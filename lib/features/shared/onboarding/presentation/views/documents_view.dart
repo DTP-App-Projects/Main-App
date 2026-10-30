@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../../../../core/i18n/app_dates.dart';
 import '../../../../../core/ui/ui.dart';
 import '../../../../../core/utils/services/remote_services/service_locator.dart';
+import '../../../../../data/models/onboarding/onboarding_bootstrap.dart';
 import '../../../../../data/models/onboarding/org_document.dart';
 import '../../../../../data/repositories/onboarding_repository.dart';
 import '../view_models/onboarding_form_cubits.dart';
@@ -23,7 +24,9 @@ class DocumentsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => BlocProvider(
-        create: (_) => DocumentsCubit(getIt<OnboardingRepository>())..load(),
+        create: (_) => DocumentsCubit(getIt<OnboardingRepository>())
+          ..load()
+          ..loadTypes(),
         child: const _DocumentsBody(),
       );
 }
@@ -48,27 +51,21 @@ class _DocumentsBody extends StatelessWidget {
       emptyIcon: Icons.description_outlined,
       itemBuilder: (document) => CollectionTile(
         icon: Icons.description_outlined,
-        title: _typeLabel(document.documentType),
+        title: CodeOption.labelIn(cubit.types, document.documentType),
         subtitle: document.expiresAt == null
             ? document.notes
             : '${'document.expires_at'.tr()}: '
                 '${AppDates.date(document.expiresAt, locale)}',
-        trailing: document.isExpired ? 'document.expired'.tr() : null,
-        // An expired registration is the one thing on this screen that has to
-        // catch the eye; the row's margin mark is how every other list in the
-        // app says so.
-        status: document.isExpired ? 'overdue' : '',
+        // «حالة التحقق»: pending → verified (or rejected / expired). An
+        // expired or rejected document is what has to catch the eye.
+        trailing: document.isExpired
+            ? 'document.expired'.tr()
+            : (document.status.isEmpty ? null : 'document.status_${document.status}'.tr()),
+        status: document.isExpired ? 'overdue' : document.status,
         onTap: () => _openEditor(context, document),
       ),
     );
   }
-
-  /// `commercial_registration` is the only type key published anywhere, so it
-  /// gets proper copy and everything else is shown as the raw code rather
-  /// than a label we would have to invent.
-  static String _typeLabel(String code) => code == _DocumentForm.knownType
-      ? 'document.type_commercial_registration'.tr()
-      : code;
 
   void _openEditor(BuildContext context, OrgDocument? document) {
     final cubit = context.read<DocumentsCubit>();
@@ -85,9 +82,6 @@ class _DocumentsBody extends StatelessWidget {
 }
 
 class _DocumentForm extends StatefulWidget {
-  /// The one document type key confirmed by the API collection.
-  static const knownType = 'commercial_registration';
-
   final OrgDocument? document;
 
   const _DocumentForm({required this.document});
@@ -98,12 +92,12 @@ class _DocumentForm extends StatefulWidget {
 
 class _DocumentFormState extends State<_DocumentForm> {
   final _formKey = GlobalKey<FormState>();
-  late final _typeCode = TextEditingController(text: widget.document?.documentType ?? '');
   late final _notes = TextEditingController(text: widget.document?.notes ?? '');
 
-  late bool _otherType = widget.document != null &&
-      widget.document!.documentType.isNotEmpty &&
-      widget.document!.documentType != _DocumentForm.knownType;
+  /// A code from `document_type_options` — `commercial_record`, not free text.
+  late String? _documentType = (widget.document?.documentType.isNotEmpty ?? false)
+      ? widget.document!.documentType
+      : null;
 
   late DateTime? _issuedAt = widget.document?.issuedAt;
   late DateTime? _expiresAt = widget.document?.expiresAt;
@@ -113,24 +107,20 @@ class _DocumentFormState extends State<_DocumentForm> {
 
   @override
   void dispose() {
-    _typeCode.dispose();
     _notes.dispose();
     super.dispose();
   }
 
-  String get _documentType =>
-      _otherType ? _typeCode.text.trim() : _DocumentForm.knownType;
-
   /// Validate before the round trip: a 12 MB photo should fail instantly, not
   /// after a minute of uploading.
   bool _acceptFile(String path) {
-    if (!UploadRules.isAllowedExtension(path)) {
+    if (!UploadRules.isAllowedDocument(path)) {
       setState(() => _fileError = 'document.bad_type'
-          .tr(namedArgs: {'types': UploadRules.allowedExtensions.join(', ')}));
+          .tr(namedArgs: {'types': UploadRules.documentExtensions.join(', ')}));
       return false;
     }
-    if (File(path).lengthSync() > UploadRules.maxBytes) {
-      setState(() => _fileError = 'document.too_large'.tr());
+    if (File(path).lengthSync() > UploadRules.documentMaxBytes) {
+      setState(() => _fileError = 'document.too_large_mb'.tr(namedArgs: {'mb': '8'}));
       return false;
     }
     setState(() {
@@ -143,7 +133,7 @@ class _DocumentFormState extends State<_DocumentForm> {
   Future<void> _pickFile() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: UploadRules.allowedExtensions,
+      allowedExtensions: UploadRules.documentExtensions,
       withData: false,
     );
     final path = result?.files.single.path;
@@ -179,6 +169,8 @@ class _DocumentFormState extends State<_DocumentForm> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    final documentType = _documentType;
+    if (documentType == null) return;
 
     // A new document needs a file; an edit may just change the dates.
     if (_filePath == null && !(widget.document?.hasFile ?? false)) {
@@ -193,7 +185,7 @@ class _DocumentFormState extends State<_DocumentForm> {
 
     final saved = await context.read<DocumentsCubit>().save(
           documentId: widget.document?.id,
-          documentType: _documentType,
+          documentType: documentType,
           filePath: _filePath,
           issuedAt: _issuedAt,
           expiresAt: _expiresAt,
@@ -206,7 +198,9 @@ class _DocumentFormState extends State<_DocumentForm> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final t = context.tokens;
-    final submit = context.watch<DocumentsCubit>().state.submit;
+    final cubit = context.watch<DocumentsCubit>();
+    final submit = cubit.state.submit;
+    final types = cubit.types;
     final hasExistingFile = widget.document?.hasFile ?? false;
 
     // `_fileError` carries both the file problems and the date-order rule;
@@ -220,28 +214,20 @@ class _DocumentFormState extends State<_DocumentForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          FormMessage(message: submit.message),
-          FormMessage(message: _fileError),
-
+          // Labels come from the API, in the request's language.
           CodePicker(
             label: 'document.type'.tr(),
-            value: _otherType ? 'other' : _DocumentForm.knownType,
-            codes: const [_DocumentForm.knownType, 'other'],
-            labelOf: (code) => code == 'other'
-                ? 'document.type_other'.tr()
-                : 'document.type_commercial_registration'.tr(),
+            value: _documentType,
+            codes: [
+              for (final type in types) type.code,
+              // An existing row's code stays selectable even if retired.
+              if (_documentType != null && types.every((t) => t.code != _documentType))
+                _documentType!,
+            ],
+            labelOf: (code) => CodeOption.labelIn(types, code),
             error: submit.fieldError('document_type'),
-            onChanged: (value) => setState(() => _otherType = value == 'other'),
+            onChanged: (value) => setState(() => _documentType = value),
           ),
-          if (_otherType)
-            AppField(
-              controller: _typeCode,
-              label: 'document.type_code'.tr(),
-              required: true,
-              helper: 'document.type_code_hint'.tr(),
-              textDirection: TextDirection.ltr,
-              validator: AppValidators.required,
-            ),
 
           _FileCard(
             fileName: _filePath ?? (hasExistingFile ? widget.document!.filePath : null),
@@ -299,6 +285,8 @@ class _DocumentFormState extends State<_DocumentForm> {
               ),
             ),
           const SizedBox(height: AppTokens.space2),
+          FormMessage(message: submit.message),
+          FormMessage(message: _fileError),
           SubmitButton(
             busy: submit.isSubmitting,
             label: 'common.save'.tr(),

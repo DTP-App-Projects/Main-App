@@ -33,7 +33,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState?> {
       active: active,
       permissions: org.permissions.toSet(),
       isOwner: org.isOwner,
-      approvedWorkspaces: org.approvedWorkspaces.toSet(),
+      approvedWorkspaces: org.approvedProfileWorkspaces,
       // Paint immediately in the palette the server last sent, so a cold
       // start does not flash the fallback colours before settling.
       theme: _session.cachedTheme(org.id, active) ?? ThemeTokens.fallbackFor(active),

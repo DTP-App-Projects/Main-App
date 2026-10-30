@@ -7,12 +7,23 @@ import 'package:go_router/go_router.dart';
 import '../../../app/shell/workspace_shell.dart';
 import '../../../features/shared/auth/presentation/views/login_view.dart';
 import '../../../features/shared/auth/presentation/views/password_reset_view.dart';
+import '../../../features/shared/auth/presentation/views/verify_email_view.dart';
+import '../../../data/models/auth/auth_user.dart';
 import '../../../features/shared/auth/presentation/views/register_owner_view.dart';
 import '../../../features/shared/advanced/views/account_views.dart';
 import '../../../features/shared/advanced/views/contracts_views.dart';
 import '../../../features/shared/advanced/views/finance_views.dart';
 import '../../../features/shared/advanced/views/ratings_view.dart';
 import '../../../features/shared/advanced/views/shelf_views.dart';
+import '../../../data/models/compliance/legal.dart';
+import '../../../features/shared/compliance/compliance_widgets.dart';
+import '../../../features/shared/compliance/terms/terms_views.dart';
+import '../../../features/shared/compliance/views/account_legal_views.dart';
+import '../../../features/shared/compliance/views/agreement_views.dart';
+import '../../../features/shared/compliance/views/document_views.dart';
+import '../../../features/shared/compliance/views/evidence_views.dart';
+import '../../../features/shared/compliance/views/marketer_views.dart';
+import '../../../features/shared/compliance/views/quotation_views.dart';
 import '../../../features/shared/notifications/presentation/views/notifications_view.dart';
 import '../../../features/shop/views/shop_browse_views.dart';
 import '../../../features/shop/views/shop_cart_views.dart';
@@ -20,11 +31,15 @@ import '../../../features/shop/views/shop_chat_views.dart';
 import '../../../features/shop/views/shop_product_view.dart';
 import '../../../features/trader/catalog/views/catalog_views.dart';
 import '../../../features/trader/drafts/views/draft_editor_view.dart';
+import '../../../features/trader/drafts/views/new_order_view.dart';
+import '../../../features/shared/advanced/views/approvals_view.dart';
+import '../../../features/shared/advanced/views/consignment_view.dart';
+import '../../../features/shared/organization/public_profile_view.dart';
+import '../../../features/shared/organization/team_view.dart';
 import '../../../features/shared/orders/views/order_detail_view.dart';
 import '../../../features/trader/orders/views/orders_views.dart';
 import '../../../features/trader/payables/views/payables_views.dart';
 import '../../../features/trader/receipts/views/goods_receipt_form_view.dart';
-import '../../../features/trader/returns/views/return_form_view.dart';
 import '../../../features/trader/shipments/views/shipments_views.dart';
 import '../../../features/trader/suppliers/views/supplier_detail_view.dart';
 import '../../../features/supplier/views/invoicing_views.dart';
@@ -34,6 +49,11 @@ import '../../../features/supplier/views/outbound_views.dart';
 import '../../../features/supplier/views/pricing_views.dart';
 import '../../../features/supplier/views/relationships_views.dart';
 import '../../../features/supplier/views/supplier_catalog_views.dart';
+import '../../../features/supplier/views/traders_directory_view.dart';
+import '../../../features/supplier/views/delivery_note_form_view.dart';
+import '../../../features/supplier/views/delivery_contracts_view.dart';
+import '../../../features/supplier/views/internal_transfers_views.dart';
+import '../../../features/supplier/views/van_sales_views.dart';
 import '../../../features/trader/suppliers/views/suppliers_view.dart';
 import '../../../features/shared/onboarding/presentation/views/bank_accounts_view.dart';
 import '../../../features/shared/onboarding/presentation/views/branches_view.dart';
@@ -54,6 +74,9 @@ abstract class AppRoutes {
   static const login = '/login';
   static const register = '/register';
   static const forgotPassword = '/forgot-password';
+
+  /// Confirm a new account's email. Needs its challenge as `extra`.
+  static const verifyEmail = '/verify-email';
   static const notifications = '/notifications';
 
   // ------------------------------------------------------- shared advanced
@@ -66,6 +89,65 @@ abstract class AppRoutes {
   static const accountSettings = '/account';
 
   static String contractDetailFor(int id) => '$contracts/$id';
+
+  /// «صندوق الموافقات» — pending contract and purchase-order approvals.
+  static const approvals = '/approvals';
+
+  /// «التوريد الأماني»: consignment shipments, sales reports, stock counts.
+  static const consignment = '/consignment';
+
+  /// «الفريق والصلاحيات» and the public «بروفايل».
+  static const team = '/team';
+  static const publicProfile = '/public-profile';
+
+  // ------------------------------------------------ compliance: legal
+  static const terms = '/terms';
+  static const termsGate = '/terms/accept';
+  static const termsHistory = '/terms/history';
+
+  static String termsDocumentFor(int termsVersionId) => '/terms/doc/$termsVersionId';
+
+  // ------------------------------------------- compliance documents (v1.5)
+  // Shared by both shells: each document says which side is looking
+  // (`my_role`) and what that side may do (`can_*`).
+  static const compliance = '/compliance';
+  static const relationshipRequests = '$compliance/relationship-requests';
+  static const quotations = '$compliance/quotations';
+  static const quotationNew = '$compliance/quotations/new';
+  static const returnNotes = '$compliance/returns';
+  static const custodyLedger = '$compliance/custody';
+  static const goodsReceipts = '$compliance/receipts';
+  static const latePaymentNotices = '$compliance/late-notices';
+  static const disputePacks = '$compliance/dispute-packs';
+  static const marketerHome = '$compliance/marketer';
+  static const supplierMarketers = '$compliance/marketers';
+  static const serviceInvoices = '$compliance/service-invoices';
+  static const complaints = '$compliance/complaints';
+  static const complaintNew = '$compliance/complaints/new';
+  static const signatories = '$compliance/signatories';
+
+  static String relationshipRequestFor(int id) => '$relationshipRequests/$id';
+
+  static String agreementsFor(AgreementKind kind) => '$compliance/agreements/${kind.path}';
+
+  static String agreementFor(AgreementKind kind, int id) => '${agreementsFor(kind)}/$id';
+
+  static String quotationFor(int id) => '$quotations/$id';
+
+  static String returnNoteFor(int id) => '$returnNotes/$id';
+
+  static String returnNoteNewFor(int purchaseOrderId, {int? invoiceId}) =>
+      '$returnNotes/new?po=$purchaseOrderId${invoiceId == null ? '' : '&invoice=$invoiceId'}';
+
+  static String goodsReceiptDetailFor(int id) => '$goodsReceipts/$id';
+
+  static String invoiceComplianceFor(int id) => '$compliance/invoices/$id';
+
+  static String latePaymentNoticeFor(int id) => '$latePaymentNotices/$id';
+
+  static String disputePackFor(int id) => '$disputePacks/$id';
+
+  static String complaintFor(int id) => '$complaints/$id';
 
   static String shelfCountFor(int contractId, {int branchId = 0}) =>
       '$shelf/$contractId/count?branch=$branchId';
@@ -120,14 +202,22 @@ abstract class AppRoutes {
 
   static String supplierDetailFor(int id) => '$traderSuppliers/$id';
 
+  /// The trader's «العلاقات التجارية».
+  static const traderRelationships = '$traderHome/relationships';
+
   static String productDetailFor(int id) => '$traderCatalog/products/$id';
 
   static String draftForSupplier(int supplierOrganizationId, {int? relationshipId}) =>
       '$traderHome/drafts/new?supplier=$supplierOrganizationId'
       '${relationshipId == null ? '' : '&relationship=$relationshipId'}';
 
-  static String draftFor(int draftId, int supplierOrganizationId) =>
-      '$traderHome/drafts/$draftId?supplier=$supplierOrganizationId';
+  static String draftFor(int draftId, int supplierOrganizationId, {int? relationshipId}) =>
+      '$traderHome/drafts/$draftId?supplier=$supplierOrganizationId'
+      '${relationshipId == null ? '' : '&relationship=$relationshipId'}';
+
+  /// «أمر شراء جديد» — the guided order; `supplier` preselects one.
+  static String newOrder({int? supplierOrganizationId}) =>
+      '$traderHome/order-entry${supplierOrganizationId == null ? '' : '?supplier=$supplierOrganizationId'}';
 
   static String orderDetailFor(int id) => '$traderOrders/$id';
 
@@ -136,9 +226,9 @@ abstract class AppRoutes {
   static String goodsReceiptFor(int deliveryNoteId) =>
       '$traderHome/receipts/new?delivery_note=$deliveryNoteId';
 
-  static String invoiceDetailFor(int id) => '$traderInvoices/$id';
+  static String invoiceDetailFor(int id, {int? paymentNoticeId}) =>
+      paymentNoticeId == null ? '$traderInvoices/$id' : '$traderInvoices/$id?notice=$paymentNoticeId';
 
-  static String returnFor(int invoiceId) => '$traderHome/returns/new?invoice=$invoiceId';
 
   // ---------------------------------------------------------- supplier track
   static const supplierOrders = '$supplierHome/orders';
@@ -151,7 +241,13 @@ abstract class AppRoutes {
   static const supplierPricing = '$supplierHome/pricing';
   static const supplierRelationships = '$supplierHome/relationships';
 
+  /// «دليل التجار»: where a supplier starts a relationship.
+  static const supplierTraders = '$supplierHome/traders';
+
   static String supplierOrderDetailFor(int id) => '$supplierOrders/$id';
+
+  /// «إنشاء إذن تسليم» for one order.
+  static String deliveryNoteNewFor(int orderId) => '$supplierOrders/$orderId/deliver';
 
   static String outboundDetailFor(int id) => '$supplierOutbound/$id';
 
@@ -159,6 +255,22 @@ abstract class AppRoutes {
 
   static String creditFor(int relationshipId) =>
       '$supplierRelationships/$relationshipId/credit';
+
+  // Catalog & stock (web «الكتالوج والمخزون»): the fleet side of supplying.
+  /// «البيع المتجول».
+  static const vanSales = '$supplierHome/van_sales';
+  static const vanSalesNew = '$vanSales/new';
+
+  /// «عقود التوصيل».
+  static const deliveryContracts = '$supplierHome/delivery_contracts';
+
+  /// «النقل الداخلي».
+  static const internalTransfers = '$supplierHome/internal_transfers';
+  static const internalTransfersNew = '$internalTransfers/new';
+
+  static String vanTripFor(int id) => '$vanSales/$id';
+
+  static String internalTransferFor(int id) => '$internalTransfers/$id';
 }
 
 abstract class AppRouter {
@@ -171,6 +283,15 @@ abstract class AppRouter {
       GoRoute(path: AppRoutes.login, builder: (_, _) => const LoginView()),
       GoRoute(path: AppRoutes.register, builder: (_, _) => const RegisterOwnerView()),
       GoRoute(path: AppRoutes.forgotPassword, builder: (_, _) => const PasswordResetView()),
+      GoRoute(
+        path: AppRoutes.verifyEmail,
+        // Only ever opened with its challenge; a cold link has no email to
+        // confirm, and logging in mails a fresh code anyway.
+        redirect: (_, state) =>
+            state.extra is EmailVerificationChallenge ? null : AppRoutes.login,
+        builder: (_, state) =>
+            VerifyEmailView(challenge: state.extra! as EmailVerificationChallenge),
+      ),
       GoRoute(
         path: AppRoutes.onboarding,
         builder: (_, _) => const OnboardingWizardView(),
@@ -220,7 +341,116 @@ abstract class AppRouter {
           ),
         ],
       ),
+      GoRoute(
+        path: AppRoutes.terms,
+        // A page, not a redirect: go_router runs a parent's redirect for every
+        // child too, with only the parent's own path — a redirect here sent
+        // `/terms/doc/1` and `/terms/accept` back to the history list.
+        builder: (_, _) => const TermsHistoryView(),
+        routes: [
+          GoRoute(path: 'accept', builder: (_, _) => const TermsGateView()),
+          GoRoute(path: 'history', builder: (_, _) => const TermsHistoryView()),
+          GoRoute(
+            path: 'doc/:id',
+            builder: (_, state) => TermsDocumentView(termsVersionId: _idOf(state, 'id')),
+          ),
+        ],
+      ),
+      GoRoute(
+        path: AppRoutes.compliance,
+        // A page, not a redirect — see `/terms` above: a parent redirect sent
+        // every compliance screen to the complaints list.
+        builder: (_, _) => const ComplaintsView(),
+        routes: [
+          GoRoute(
+            path: 'relationship-requests',
+            builder: (_, _) => const RelationshipRequestsView(),
+            routes: [
+              GoRoute(path: ':id', builder: (_, s) => RelationshipRequestDetailView(requestId: _idOf(s, 'id'))),
+            ],
+          ),
+          GoRoute(
+            path: 'agreements/:kind',
+            builder: (_, s) => AgreementsView(kind: AgreementKind.parse(s.pathParameters['kind'])),
+            routes: [
+              GoRoute(
+                path: ':id',
+                builder: (_, s) => AgreementDetailView(
+                  kind: AgreementKind.parse(s.pathParameters['kind']),
+                  documentId: _idOf(s, 'id'),
+                ),
+              ),
+            ],
+          ),
+          GoRoute(
+            path: 'quotations',
+            builder: (_, _) => const QuotationsView(),
+            routes: [
+              GoRoute(path: 'new', builder: (_, _) => const QuotationFormView()),
+              GoRoute(path: ':id', builder: (_, s) => QuotationDetailView(quotationId: _idOf(s, 'id'))),
+            ],
+          ),
+          GoRoute(
+            path: 'returns',
+            builder: (_, _) => const ReturnNotesView(),
+            routes: [
+              GoRoute(
+                path: 'new',
+                builder: (_, s) => ReturnNoteFormView(
+                  purchaseOrderId: _queryId(s, 'po') ?? 0,
+                  invoiceId: _queryId(s, 'invoice'),
+                ),
+              ),
+              GoRoute(path: ':id', builder: (_, s) => ReturnNoteDetailView(returnNoteId: _idOf(s, 'id'))),
+            ],
+          ),
+          GoRoute(path: 'custody', builder: (_, _) => const CustodyLedgerView()),
+          GoRoute(
+            path: 'receipts',
+            builder: (_, _) => const GoodsReceiptsView(),
+            routes: [
+              GoRoute(path: ':id', builder: (_, s) => GoodsReceiptDetailView(receiptId: _idOf(s, 'id'))),
+            ],
+          ),
+          GoRoute(path: 'invoices/:id', builder: (_, s) => InvoiceComplianceView(invoiceId: _idOf(s, 'id'))),
+          GoRoute(
+            path: 'late-notices',
+            builder: (_, _) => const LatePaymentNoticesView(),
+            routes: [
+              GoRoute(path: ':id', builder: (_, s) => LatePaymentNoticeDetailView(noticeId: _idOf(s, 'id'))),
+            ],
+          ),
+          GoRoute(
+            path: 'dispute-packs',
+            builder: (_, _) => const DisputePacksView(),
+            routes: [
+              GoRoute(path: ':id', builder: (_, s) => DisputePackDetailView(packId: _idOf(s, 'id'))),
+            ],
+          ),
+          GoRoute(path: 'marketer', builder: (_, _) => const MarketerHomeView()),
+          GoRoute(path: 'marketers', builder: (_, _) => const SupplierMarketersView()),
+          GoRoute(path: 'service-invoices', builder: (_, _) => const ServiceInvoicesView()),
+          GoRoute(
+            path: 'complaints',
+            builder: (_, _) => const ComplaintsView(),
+            routes: [
+              GoRoute(
+                path: 'new',
+                builder: (_, s) => ComplaintFormView(
+                  categories: s.extra is List<ComplaintCategory> ? s.extra! as List<ComplaintCategory> : const [],
+                ),
+              ),
+              GoRoute(path: ':id', builder: (_, s) => ComplaintDetailView(ticketId: _idOf(s, 'id'))),
+            ],
+          ),
+          GoRoute(path: 'signatories', builder: (_, _) => const SignatoriesView()),
+        ],
+      ),
       GoRoute(path: AppRoutes.settlements, builder: (_, _) => const SettlementsView()),
+      GoRoute(path: AppRoutes.approvals, builder: (_, _) => const ApprovalsView()),
+      GoRoute(path: AppRoutes.consignment, builder: (_, _) => const ConsignmentView()),
+      GoRoute(path: AppRoutes.team, builder: (_, _) => const TeamView()),
+      GoRoute(path: AppRoutes.publicProfile, builder: (_, _) => const PublicProfileView()),
       GoRoute(path: AppRoutes.wallet, builder: (_, _) => const WalletView()),
       GoRoute(path: AppRoutes.subscription, builder: (_, _) => const SubscriptionView()),
       GoRoute(
@@ -303,6 +533,10 @@ abstract class AppRouter {
         builder: (_, _) => const TraderShell(),
         routes: [
           GoRoute(
+            path: 'relationships',
+            builder: (_, _) => const RelationshipsView(side: Workspace.trader),
+          ),
+          GoRoute(
             path: 'suppliers',
             builder: (_, _) => const SuppliersView(),
             routes: [
@@ -323,6 +557,10 @@ abstract class AppRouter {
                 builder: (_, state) => ProductDetailView(productId: _idOf(state, 'id')),
               ),
             ],
+          ),
+          GoRoute(
+            path: 'order-entry',
+            builder: (_, state) => NewOrderView(supplierOrganizationId: _queryId(state, 'supplier')),
           ),
           GoRoute(
             path: 'drafts/new',
@@ -372,16 +610,16 @@ abstract class AppRouter {
             routes: [
               GoRoute(
                 path: ':id',
-                builder: (_, state) => InvoiceDetailView(invoiceId: _idOf(state, 'id')),
+                builder: (_, state) => InvoiceDetailView(
+                  invoiceId: _idOf(state, 'id'),
+                  highlightNoticeId: int.tryParse(state.uri.queryParameters['notice'] ?? ''),
+                ),
               ),
             ],
           ),
-          GoRoute(
-            path: 'returns/new',
-            builder: (_, state) => ReturnFormView(
-              invoiceId: _queryId(state, 'invoice') ?? 0,
-            ),
-          ),
+          // The legacy `post_invoice_returns` form, retired: a return is a
+          // return note now (accepted with a code, credit note follows).
+          GoRoute(path: 'returns/new', redirect: (_, _) => AppRoutes.returnNotes),
         ],
       ),
       GoRoute(
@@ -395,6 +633,12 @@ abstract class AppRouter {
               GoRoute(
                 path: ':id',
                 builder: (_, state) => OrderDetailView(orderId: _idOf(state, 'id')),
+                routes: [
+                  GoRoute(
+                    path: 'deliver',
+                    builder: (_, state) => DeliveryNoteFormView(orderId: _idOf(state, 'id')),
+                  ),
+                ],
               ),
             ],
           ),
@@ -420,7 +664,8 @@ abstract class AppRouter {
             path: 'collections',
             builder: (_, _) => const CollectionsInboxView(),
           ),
-          GoRoute(path: 'returns', builder: (_, _) => const ReturnsInboxView()),
+          // The legacy returns inbox approved without a code; retired.
+          GoRoute(path: 'returns', redirect: (_, _) => AppRoutes.returnNotes),
           GoRoute(
             path: 'catalog',
             builder: (_, _) => const SupplierCatalogView(),
@@ -432,6 +677,38 @@ abstract class AppRouter {
             ],
           ),
           GoRoute(path: 'pricing', builder: (_, _) => const PriceListsView()),
+          GoRoute(
+            path: 'traders',
+            builder: (_, _) => const TradersDirectoryView(),
+          ),
+          // `new` before `:id`, or it would be read as an id.
+          GoRoute(
+            path: 'van_sales',
+            builder: (_, _) => const VanTripsView(),
+            routes: [
+              GoRoute(path: 'new', builder: (_, _) => const VanLoadSheetView()),
+              GoRoute(
+                path: ':id',
+                builder: (_, state) => VanTripDetailView(tripId: _idOf(state, 'id')),
+              ),
+            ],
+          ),
+          GoRoute(
+            path: 'delivery_contracts',
+            builder: (_, _) => const DeliveryContractsView(),
+          ),
+          GoRoute(
+            path: 'internal_transfers',
+            builder: (_, _) => const InternalTransfersView(),
+            routes: [
+              GoRoute(path: 'new', builder: (_, _) => const InternalTransferFormView()),
+              GoRoute(
+                path: ':id',
+                builder: (_, state) =>
+                    InternalTransferDetailView(transferId: _idOf(state, 'id')),
+              ),
+            ],
+          ),
           GoRoute(
             path: 'relationships',
             builder: (_, _) => const RelationshipsView(),
@@ -454,7 +731,12 @@ abstract class AppRouter {
     final workspace = getIt<WorkspaceCubit>().state;
     final location = state.matchedLocation;
 
-    const publicRoutes = {AppRoutes.login, AppRoutes.register, AppRoutes.forgotPassword};
+    const publicRoutes = {
+      AppRoutes.login,
+      AppRoutes.register,
+      AppRoutes.forgotPassword,
+      AppRoutes.verifyEmail,
+    };
 
     switch (session.status) {
       case SessionStatus.unknown:
@@ -470,6 +752,9 @@ abstract class AppRouter {
         return publicRoutes.contains(location) ? null : AppRoutes.login;
 
       case SessionStatus.authenticated:
+        // The terms gate can fire from the onboarding wizard too (its writes
+        // are gated like any other), so it is reachable before a workspace.
+        if (location.startsWith(AppRoutes.terms)) return null;
         final inOnboarding = location.startsWith(AppRoutes.onboarding);
         // An unfinished organization is *held* in the wizard.
         if (session.needsOnboarding || workspace == null) {
@@ -490,7 +775,12 @@ abstract class AppRouter {
 /// cross-cutting ones, reachable from both shells.
 bool _isSharedRoute(String location) =>
     location == AppRoutes.notifications ||
+    location.startsWith(AppRoutes.compliance) ||
     location.startsWith(AppRoutes.contracts) ||
+    location.startsWith(AppRoutes.approvals) ||
+    location.startsWith(AppRoutes.consignment) ||
+    location.startsWith(AppRoutes.team) ||
+    location.startsWith(AppRoutes.publicProfile) ||
     location.startsWith(AppRoutes.shelf) ||
     location.startsWith(AppRoutes.settlements) ||
     location.startsWith(AppRoutes.wallet) ||

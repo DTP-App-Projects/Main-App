@@ -32,6 +32,24 @@ class BusinessMode {
   static const hybrid = 'hybrid';
 }
 
+/// `organizations.activity_type`, required at sign-up (spec §2). The allowed
+/// values depend on the business mode and are not published; these are the
+/// ones staging accepted on 2026-10-05 (`supplier_trader` is also the
+/// activity of the supplier test org). Anything else the server refuses with
+/// a validation message on `activity_type`, shown under the picker.
+class ActivityType {
+  ActivityType._();
+
+  static const marketer = 'marketer';
+
+  static List<String> forMode(String businessMode) => switch (businessMode) {
+        BusinessMode.trader => const ['retailer', marketer],
+        BusinessMode.supplier => const ['factory', 'supplier_trader'],
+        BusinessMode.hybrid => const ['factory', 'supplier_trader'],
+        _ => const [],
+      };
+}
+
 /// The palette `/ops/panel` and `/ops/quick_actions` ship per workspace.
 /// Recolouring on switch is the product's own signal for "you are now the
 /// supplier" — so these are never hardcoded in a widget.

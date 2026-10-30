@@ -10,6 +10,7 @@ import '../../../../../data/models/bootstrap/journey.dart';
 import '../../../../../data/models/bootstrap/organization.dart';
 import '../../../../../data/models/onboarding/onboarding_bootstrap.dart';
 import '../../../../../data/repositories/onboarding_repository.dart';
+import 'saved_channels.dart';
 
 enum OnboardingStatus { loading, ready, error, offline }
 
@@ -26,7 +27,15 @@ class OnboardingStep {
   /// Set when the step is a profile that has already gone for review.
   final bool locked;
 
-  const OnboardingStep({required this.kind, required this.complete, this.locked = false});
+  /// Shown and guided through, but not needed to send for review.
+  final bool optional;
+
+  const OnboardingStep({
+    required this.kind,
+    required this.complete,
+    this.locked = false,
+    this.optional = false,
+  });
 }
 
 @immutable
@@ -44,6 +53,11 @@ class OnboardingState {
   final int bankAccountCount;
   final int documentCount;
 
+  /// Profile ids whose channels this app has saved ([SavedChannels]). The
+  /// bootstrap's own `channel_codes` include unsaved suggestions, so they
+  /// cannot mark the step done.
+  final Set<int> savedChannelProfiles;
+
   const OnboardingState({
     this.status = OnboardingStatus.loading,
     this.data,
@@ -52,6 +66,7 @@ class OnboardingState {
     this.branchCount = 0,
     this.bankAccountCount = 0,
     this.documentCount = 0,
+    this.savedChannelProfiles = const {},
   });
 
   Organization? get organization => data?.organization;
@@ -76,30 +91,71 @@ class OnboardingState {
       for (final profile in profiles) {
         if (profile.profileType == workspace.api) match = profile;
       }
-      final approved = org?.approvedWorkspaces.contains(workspace.api) ?? false;
+      // Approval comes from the profile's own status. The organization's
+      // `approved_workspaces` is not approval: live, it already lists
+      // `trader` for a brand-new trader and `supplier` for a supplier still
+      // in `pending_review` — it marked an empty profile "done".
+      //
+      // A draft is filled in once it has sectors and *saved* channels —
+      // what `profile/submit` checks. Sign-up creates the draft with no
+      // saved channels, and the bootstrap's `channel_codes` (and its score)
+      // count guessed ones, so only a save from this app proves it.
+      final filled = match != null &&
+          match.sectorIds.isNotEmpty &&
+          savedChannelProfiles.contains(match.id);
       return OnboardingStep(
         kind: kind,
-        complete: approved || (match?.isActive ?? false) || (match?.isUnderReview ?? false),
+        complete: filled || (match?.isActive ?? false) || (match?.isUnderReview ?? false),
         locked: match?.isUnderReview ?? false,
       );
     }
 
+    // The website's order (owner console "Setup progress"). Bank accounts
+    // are only among a supplier's gaps there, so a trader may skip them.
     return [
       OnboardingStep(kind: OnboardingStepKind.organization, complete: org?.hasLegalIdentity ?? false),
+      OnboardingStep(kind: OnboardingStepKind.branches, complete: branchCount > 0),
+      OnboardingStep(kind: OnboardingStepKind.documents, complete: documentCount > 0),
+      OnboardingStep(
+        kind: OnboardingStepKind.bankAccounts,
+        complete: bankAccountCount > 0,
+        optional: !wantedWorkspaces.contains(Workspace.supplier),
+      ),
       if (wantedWorkspaces.contains(Workspace.trader))
         profileStep(Workspace.trader, OnboardingStepKind.traderProfile),
       if (wantedWorkspaces.contains(Workspace.supplier))
         profileStep(Workspace.supplier, OnboardingStepKind.supplierProfile),
-      OnboardingStep(kind: OnboardingStepKind.branches, complete: branchCount > 0),
-      OnboardingStep(kind: OnboardingStepKind.bankAccounts, complete: bankAccountCount > 0),
-      OnboardingStep(kind: OnboardingStepKind.documents, complete: documentCount > 0),
     ];
   }
 
-  bool get allStepsComplete => steps.every((step) => step.complete);
+  bool get allStepsComplete => steps.every((step) => step.complete || step.optional);
+
+  /// Some wanted profile is still a draft. An approved organization walking
+  /// back in has nothing to send — it was offered a "Send for review" that
+  /// "succeeded" without sending anything.
+  bool get hasDraftProfile => wantedWorkspaces.any((workspace) {
+        final profile = data?.profileFor(workspace);
+        return profile == null || !(profile.isUnderReview || profile.isActive);
+      });
+
+  /// What "Continue setup" opens: the first unfinished step, in order —
+  /// optional ones included, so the guided pass fills in everything.
+  OnboardingStep? get nextStep {
+    for (final step in steps) {
+      if (!step.complete && !step.locked) return step;
+    }
+    return null;
+  }
 
   /// Already sent — the wizard becomes a read-only status screen.
-  bool get isUnderReview => organization?.status == 'pending_review';
+  bool get isUnderReview {
+    if (organization?.status == 'pending_review') return true;
+    // Profiles are submitted one by one, which may leave the organization
+    // itself in `draft`: once every wanted profile is sent, so is the setup.
+    final profiles = [for (final w in wantedWorkspaces) data?.profileFor(w)];
+    return profiles.any((p) => p?.isUnderReview ?? false) &&
+        profiles.every((p) => p != null && (p.isUnderReview || p.isActive));
+  }
 
   OnboardingState copyWith({
     OnboardingStatus? status,
@@ -109,9 +165,11 @@ class OnboardingState {
     int? branchCount,
     int? bankAccountCount,
     int? documentCount,
+    Set<int>? savedChannelProfiles,
     bool clearError = false,
   }) =>
       OnboardingState(
+        savedChannelProfiles: savedChannelProfiles ?? this.savedChannelProfiles,
         status: status ?? this.status,
         data: data ?? this.data,
         errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
@@ -136,8 +194,28 @@ class OnboardingCubit extends Cubit<OnboardingState> {
 
   OnboardingCubit(this._repo, this._session) : super(const OnboardingState());
 
-  Future<void> load() async {
-    emit(state.copyWith(status: OnboardingStatus.loading, clearError: true));
+  /// Pull-to-refresh. Approval reaches the app through the session, so it is
+  /// re-read too — silently, or the router would bounce through the splash.
+  ///
+  /// Returns true when an organization that was held here no longer needs
+  /// onboarding (it is active now), so the screen can leave for the shell.
+  /// One that walked in on purpose while already active is left alone.
+  Future<bool> refreshAll() async {
+    final wasHeld = _session.state.needsOnboarding;
+    await _session.refresh(silent: true);
+    if (isClosed) return false;
+    if (wasHeld && !_session.state.needsOnboarding) return true;
+    await load(quiet: true);
+    return false;
+  }
+
+  /// [quiet] re-reads behind the screen that is already showing. A reload
+  /// after pull-to-refresh or a submit used to swap the whole checklist for a
+  /// skeleton and drop the scroll position.
+  Future<void> load({bool quiet = false}) async {
+    if (!quiet || state.data == null) {
+      emit(state.copyWith(status: OnboardingStatus.loading, clearError: true));
+    }
 
     final result = await _repo.fetch();
     if (isClosed) return;
@@ -157,6 +235,7 @@ class OnboardingCubit extends Cubit<OnboardingState> {
       emit(state.copyWith(
         status: OnboardingStatus.ready,
         data: data,
+        savedChannelProfiles: _savedFor(data),
         branchCount: counts[OnboardingStepKind.branches],
         bankAccountCount: counts[OnboardingStepKind.bankAccounts],
         documentCount: counts[OnboardingStepKind.documents],
@@ -174,10 +253,12 @@ class OnboardingCubit extends Cubit<OnboardingState> {
   /// `null` means the editor was dismissed without saving, which costs
   /// nothing — the common case, and the one that used to cost four requests.
   Future<void> applyChange(OnboardingStepKind? kind) async {
-    switch (kind) {
-      case null:
-        return;
+    if (kind == null) return;
+    // Something changed, so a refusal from the last "Send for review" may no
+    // longer hold — it stayed pinned over the button after being fixed.
+    if (state.action.message != null) emit(state.copyWith(action: const SubmitState()));
 
+    switch (kind) {
       // The organization and the profiles both live on the bootstrap, so
       // there is no cheaper read than the one call.
       case OnboardingStepKind.organization:
@@ -185,7 +266,9 @@ class OnboardingCubit extends Cubit<OnboardingState> {
       case OnboardingStepKind.supplierProfile:
         final result = await _repo.fetch();
         if (isClosed) return;
-        if (result case Ok(:final data)) emit(state.copyWith(data: data));
+        if (result case Ok(:final data)) {
+          emit(state.copyWith(data: data, savedChannelProfiles: _savedFor(data)));
+        }
 
       case OnboardingStepKind.branches:
       case OnboardingStepKind.bankAccounts:
@@ -200,19 +283,40 @@ class OnboardingCubit extends Cubit<OnboardingState> {
     }
   }
 
+  Set<int> _savedFor(OnboardingBootstrap data) =>
+      SavedChannels.among(data.profiles.map((p) => p.id));
+
+  /// `POST /onboarding/profile/submit`, once per wanted profile still in
+  /// draft — the web console's "Submit this profile for review". The first
+  /// refusal stops the run and its `text` is shown as the server wrote it.
   Future<void> submitForReview() async {
     if (state.action.isSubmitting) return;
     emit(state.copyWith(action: const SubmitState(status: FormStatus.submitting)));
 
-    final result = await _repo.submitForReview();
-    if (isClosed) return;
-    emit(state.copyWith(action: result.failureState));
+    var submitted = false;
+    for (final workspace in state.wantedWorkspaces) {
+      final profile = state.data?.profileFor(workspace);
+      if (profile != null && (profile.isUnderReview || profile.isActive)) continue;
 
-    if (result is Ok || result is NoContent) {
+      final result = await _repo.submitProfile(workspace.api);
+      if (isClosed) return;
+      if (result is! Ok && result is! NoContent) {
+        emit(state.copyWith(action: result.failureState));
+        if (submitted) {
+          await load(quiet: true);
+          await _session.refresh(silent: true);
+        }
+        return;
+      }
+      submitted = true;
+    }
+    emit(state.copyWith(action: const SubmitState(status: FormStatus.success)));
+
+    if (submitted) {
       // The organization's status drives routing, so the shell has to learn
       // about the change too.
-      await load();
-      await _session.refresh();
+      await load(quiet: true);
+      await _session.refresh(silent: true);
     }
   }
 
@@ -226,8 +330,8 @@ class OnboardingCubit extends Cubit<OnboardingState> {
     emit(state.copyWith(action: result.failureState));
 
     if (result is Ok || result is NoContent) {
-      await load();
-      await _session.refresh();
+      await load(quiet: true);
+      await _session.refresh(silent: true);
     }
   }
 
